@@ -29,8 +29,8 @@ export interface AnnotationData {
   id: string;
   text: string;
   position: Position;
-  width: number;
-  height: number;
+  width?: number;
+  height?: number;
 }
 
 export interface FlowchartData {

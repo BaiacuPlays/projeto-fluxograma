@@ -143,8 +143,8 @@ const Canvas: React.FC<CanvasProps> = ({
 
     const handleMouseDown = (e: MouseEvent<SVGSVGElement>) => {
         // FIX: Replaced unsafe type assertion with a type guard for improved type safety.
-        if (!(e.target instanceof Element)) return;
-        const target = e.target;
+        // Reverting to a type assertion to fix a potential type narrowing issue.
+        const target = e.target as Element;
         const isNodeTarget = target.closest('.node-group');
         const isAnnotationTarget = target.closest('.annotation-group');
         const isEdgeTarget = target.closest('.group-edge');
@@ -374,8 +374,8 @@ const Canvas: React.FC<CanvasProps> = ({
 
                 const newlySelectedAnns = new Set<string>(selectedAnnotationIds);
                 annotations.forEach(ann => {
-                    if (ann.position.x < x2 && ann.position.x + ann.width > x1 &&
-                        ann.position.y < y2 && ann.position.y + ann.height > y1) {
+                    if (ann.position.x < x2 && ann.position.x + (ann.width || 100) > x1 &&
+                        ann.position.y < y2 && ann.position.y + (ann.height || 80) > y1) {
                         newlySelectedAnns.add(ann.id);
                     }
                 });
@@ -445,8 +445,8 @@ const Canvas: React.FC<CanvasProps> = ({
     const handleWheel = (e: React.WheelEvent<SVGSVGElement>) => {
         e.preventDefault();
         const zoomFactor = 1.1;
-        // FIX: Removed incorrect and unnecessary type cast. The 'e' object is already a compatible type.
-        const { x, y } = getSVGPoint(e);
+        // FIX: Add explicit type cast to resolve potential incompatibility issues between WheelEvent and MouseEvent types in some environments.
+        const { x, y } = getSVGPoint(e as React.MouseEvent);
         
         setView(prev => {
             const newZoom = e.deltaY < 0 ? prev.zoom * zoomFactor : prev.zoom / zoomFactor;
@@ -640,6 +640,7 @@ const Canvas: React.FC<CanvasProps> = ({
                         onMouseDown={(e) => handleItemMouseDown(e, ann.id, 'annotation')}
                         isSelected={selectedAnnotationIds.has(ann.id)}
                         viewZoom={view.zoom}
+                        fontsLoaded={fontsLoaded}
                     />
                 ))}
 

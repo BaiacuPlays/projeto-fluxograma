@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import React, { useState, useRef, useEffect, KeyboardEvent, useLayoutEffect } from 'react';
 import { AnnotationData, Position } from '../types';
 import { TrashIcon } from './Icons';
 
@@ -12,6 +12,7 @@ interface AnnotationProps {
   onMouseDown: (e: React.MouseEvent) => void;
   isSelected: boolean;
   viewZoom: number;
+  fontsLoaded: boolean;
 }
 
 interface ResizingState {
@@ -26,17 +27,58 @@ interface ResizingState {
 
 const MIN_WIDTH = 100;
 const MIN_HEIGHT = 80;
+const MAX_WIDTH = 350;
+
 
 const Annotation: React.FC<AnnotationProps> = ({ 
     data, onPositionChange, onTextChange, onSizeChange, 
-    onDelete, onMouseDown, isSelected, viewZoom
+    onDelete, onMouseDown, isSelected, viewZoom, fontsLoaded
 }) => {
     const [resizingState, setResizingState] = useState<ResizingState | null>(null);
     const [isEditing, setIsEditing] = useState(false);
     const [editText, setEditText] = useState(data.text);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const textRef = useRef<HTMLDivElement>(null);
 
-    const { width, height } = data;
+    const autoSizeModeRef = useRef(data.width === undefined);
+
+    useEffect(() => {
+        if (data.width === undefined) {
+            autoSizeModeRef.current = true;
+        }
+    }, [data.width]);
+
+    const { width = MIN_WIDTH, height = MIN_HEIGHT } = data;
+    const isRotated = !isEditing;
+
+    useLayoutEffect(() => {
+        if (!autoSizeModeRef.current || isEditing || !textRef.current || resizingState || !fontsLoaded) {
+            return;
+        }
+
+        const textEl = textRef.current;
+        const paddingX = 32; // p-4
+        const paddingY = 32; // p-4
+
+        textEl.style.width = 'auto'; 
+        const naturalWidth = textEl.scrollWidth;
+        const requiredWidthForText = Math.max(MIN_WIDTH, naturalWidth + paddingX);
+        
+        const calculatedWidth = Math.min(MAX_WIDTH, requiredWidthForText);
+        
+        const contentWidth = calculatedWidth - paddingX;
+        textEl.style.width = `${contentWidth}px`;
+        
+        const wrappedHeight = textEl.scrollHeight;
+        const calculatedHeight = Math.max(MIN_HEIGHT, wrappedHeight + paddingY);
+        
+        textEl.style.width = ''; 
+
+        if (calculatedWidth !== width || calculatedHeight !== height) {
+            onSizeChange(data.id, { width: calculatedWidth, height: calculatedHeight });
+        }
+    }, [data.text, data.id, onSizeChange, isEditing, width, height, resizingState, fontsLoaded]);
+
 
     const handleInternalMouseDown = (e: React.MouseEvent) => {
         const target = e.target as HTMLElement;
@@ -54,6 +96,7 @@ const Annotation: React.FC<AnnotationProps> = ({
     const handleResizeMouseDown = (e: React.MouseEvent, handle: string) => {
         e.stopPropagation();
         e.preventDefault();
+        autoSizeModeRef.current = false;
         setResizingState({
             handle,
             startX: e.clientX,
@@ -147,83 +190,94 @@ const Annotation: React.FC<AnnotationProps> = ({
             onMouseDown={handleInternalMouseDown}
             onDoubleClick={handleDoubleClick}
         >
-            <g transform="rotate(-2)" style={{ transformOrigin: 'center' }} filter="url(#annotation-shadow)">
-                <rect 
-                    x="0" y="0" 
-                    width={width} height={height} 
-                    fill="#FBBF24"
-                    stroke="#F59E0B"
-                    strokeWidth="1.5"
-                />
-            </g>
-
-            {isSelected && (
-                <rect
-                    x={-4} y={-4}
-                    width={width + 8}
-                    height={height + 8}
-                    fill="none"
-                    stroke="var(--color-accent)"
-                    strokeWidth="2"
-                    strokeDasharray="4 4"
-                    className="pointer-events-none"
-                />
-            )}
-
-            {isEditing ? (
-                 <foreignObject x="0" y="0" width={width} height={height}>
-                    <div className="w-full h-full flex items-center justify-center p-3 box-border">
-                        <textarea
-                            ref={textareaRef}
-                            value={editText}
-                            onChange={handleTextChange}
-                            onBlur={handleTextBlur}
-                            onKeyDown={handleKeyDown}
-                            className="w-full h-full bg-transparent text-gray-800 font-medium text-sm p-1 m-0 border border-amber-600 rounded-md focus:ring-0 resize-none overflow-y-auto"
-                            style={{ fontFamily: 'Inter, sans-serif' }}
-                        />
-                    </div>
-                 </foreignObject>
-            ) : (
-                <foreignObject x="0" y="0" width={width} height={height} className="pointer-events-none">
-                     <div className="w-full h-full flex items-start justify-start text-left text-gray-800 font-medium text-sm p-4 box-border">
-                        <div className="w-full h-full overflow-y-auto custom-scrollbar" style={{ scrollbarColor: '#ca8a04 #fde68a' }}>
-                            {data.text.split('\\n').map((line, i) => <p key={i}>{line || ' '}</p>)}
-                        </div>
-                     </div>
-                </foreignObject>
-            )}
-
-            {isSelected && !isEditing && (
-                 <g className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                    {resizeHandles.map(handle => (
-                         <rect
-                            key={handle.id}
-                            data-resize-handle={handle.id}
-                            x={handle.x}
-                            y={handle.y}
-                            width="10"
-                            height="10"
-                            rx="2"
-                            ry="2"
-                            fill="var(--color-accent)"
-                            stroke="var(--color-bg-secondary)"
-                            strokeWidth="2"
-                            className="cursor-[var(--cursor)] hover:fill-white transition-colors duration-200"
-                            style={{ '--cursor': handle.cursor } as React.CSSProperties}
-                            onMouseDown={(e) => handleResizeMouseDown(e, handle.id)}
-                        />
-                    ))}
+            <g 
+                transform={isRotated ? "rotate(-2)" : ""} 
+                style={{ transformOrigin: 'center' }}
+            >
+                <g filter={isRotated ? "url(#annotation-shadow)" : "none"}>
+                    <rect 
+                        x="0" y="0" 
+                        width={width} height={height} 
+                        fill="#FBBF24"
+                        stroke="#F59E0B"
+                        strokeWidth="1.5"
+                    />
                 </g>
-            )}
-             
-            <foreignObject x={width - 12} y={-12} width="24" height="24" className="overflow-visible">
-                 <button 
-                    onClick={(e) => { e.stopPropagation(); onDelete(data.id); }}
-                    className="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity focus:outline-none p-1 delete-button-wrapper transform hover:scale-110">
-                     <TrashIcon />
-                 </button>
-            </foreignObject>
+
+                {isSelected && (
+                    <rect
+                        x={-4} y={-4}
+                        width={width + 8}
+                        height={height + 8}
+                        fill="none"
+                        stroke="var(--color-accent)"
+                        strokeWidth="2"
+                        strokeDasharray="4 4"
+                        className="pointer-events-none"
+                    />
+                )}
+
+                {isEditing ? (
+                     <foreignObject x="0" y="0" width={width} height={height}>
+                        <div className="w-full h-full flex items-center justify-center p-3 box-border">
+                            <textarea
+                                ref={textareaRef}
+                                value={editText}
+                                onChange={handleTextChange}
+                                onBlur={handleTextBlur}
+                                onKeyDown={handleKeyDown}
+                                className="w-full h-full bg-transparent text-gray-800 font-medium text-sm p-1 m-0 border border-amber-600 rounded-md focus:ring-0 resize-none overflow-y-auto"
+                                style={{ fontFamily: 'Inter, sans-serif' }}
+                            />
+                        </div>
+                     </foreignObject>
+                ) : (
+                    <foreignObject x="0" y="0" width={width} height={height} className="pointer-events-none">
+                         <div className="w-full h-full flex items-center justify-center text-center text-gray-800 font-medium text-sm p-4 box-border">
+                            <div 
+                                ref={textRef}
+                                style={{ 
+                                    whiteSpace: 'pre-wrap', 
+                                    wordBreak: 'break-word' 
+                                }}
+                            >
+                                {data.text}
+                            </div>
+                         </div>
+                    </foreignObject>
+                )}
+
+                {isSelected && !isEditing && (
+                     <g className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                        {resizeHandles.map(handle => (
+                             <rect
+                                key={handle.id}
+                                data-resize-handle={handle.id}
+                                x={handle.x}
+                                y={handle.y}
+                                width="10"
+                                height="10"
+                                rx="2"
+                                ry="2"
+                                fill="var(--color-accent)"
+                                stroke="var(--color-bg-secondary)"
+                                strokeWidth="2"
+                                className="cursor-[var(--cursor)] hover:fill-white transition-colors duration-200"
+                                style={{ '--cursor': handle.cursor } as React.CSSProperties}
+                                onMouseDown={(e) => handleResizeMouseDown(e, handle.id)}
+                            />
+                        ))}
+                    </g>
+                )}
+                 
+                <foreignObject x={width - 12} y={-12} width="24" height="24" className="overflow-visible">
+                     <button 
+                        onClick={(e) => { e.stopPropagation(); onDelete(data.id); }}
+                        className="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs opacity-0 group-hover:opacity-100 transition-opacity focus:outline-none p-1 delete-button-wrapper transform hover:scale-110">
+                         <TrashIcon />
+                     </button>
+                </foreignObject>
+            </g>
         </g>
     );
 };

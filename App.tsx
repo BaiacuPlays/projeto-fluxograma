@@ -96,9 +96,9 @@ const sanitizeFlowchartData = (data: any): FlowchartData => {
             const y = parseFloat(position.y);
             if (!isFinite(x) || !isFinite(y)) return null;
 
-            const width = parseFloat(a.width);
-            const height = parseFloat(a.height);
-            if (!isFinite(width) || !isFinite(height)) return null;
+            const width = a.width !== undefined ? parseFloat(a.width) : undefined;
+            const height = a.height !== undefined ? parseFloat(a.height) : undefined;
+            if ((width !== undefined && !isFinite(width)) || (height !== undefined && !isFinite(height))) return null;
 
             return {
                 id: a.id,
@@ -264,8 +264,6 @@ const App: React.FC = () => {
       id: `annotation-${Date.now()}`,
       text: 'Clique duas vezes para editar...',
       position: finalPos,
-      width: 160,
-      height: 120,
     };
     setAnnotations((anns) => [...anns, newAnnotation]);
   }, [snapToGrid]);
@@ -585,8 +583,8 @@ const App: React.FC = () => {
     annotations.forEach(ann => {
         minX = Math.min(minX, ann.position.x);
         minY = Math.min(minY, ann.position.y);
-        maxX = Math.max(maxX, ann.position.x + ann.width);
-        maxY = Math.max(maxY, ann.position.y + ann.height);
+        maxX = Math.max(maxX, ann.position.x + (ann.width || 160));
+        maxY = Math.max(maxY, ann.position.y + (ann.height || 120));
     });
 
     const contentWidth = maxX - minX;
