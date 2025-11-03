@@ -1,7 +1,20 @@
 import React, { useState, useRef, useCallback, MouseEvent } from 'react';
 import { NodeData, EdgeData, Position } from '../types';
 import Node from './Node';
-import Edge, { getClosestConnection, getCurvePath } from './Edge';
+import Edge, { getClosestConnection, getCurvePath, getConnectionPoints } from './Edge';
+
+type SnapTarget = {
+    edgeId: string;
+    sourceNodeId: string;
+    targetNodeId: string;
+};
+
+type DisplacedNodeInfo = {
+    nodeId: string;
+    originalPosition: Position;
+}
+
+const CROWDED_THRESHOLD = 250; 
 
 interface CanvasProps {
   nodes: NodeData[];
@@ -18,27 +31,35 @@ interface CanvasProps {
   setSelectedEdgeId: (id: string | null) => void;
   deleteEdge: (id: string) => void;
   updateEdgeLabel: (id: string, label: string) => void;
-  onNodeDragStart: (id: string) => void;
-  onNodeDrag: (id: string, position: Position) => void;
-  onNodeDragEnd: (id: string) => void;
-  snapTarget: { edgeId: string; sourceNodeId: string; targetNodeId: string; } | null;
-  draggedNodeId: string | null;
   fontsLoaded: boolean;
+  selectedNodeIds: Set<string>;
+  setSelectedNodeIds: React.Dispatch<React.SetStateAction<Set<string>>>;
 }
 
 const Canvas: React.FC<CanvasProps> = ({ 
     nodes, edges, setNodes, setEdges, updateNodePosition, updateNodeText, 
     updateNodeDimensions, deleteNode, autoConnect, onOpenContextMenu,
     selectedEdgeId, setSelectedEdgeId, deleteEdge, updateEdgeLabel,
-    onNodeDragStart, onNodeDrag, onNodeDragEnd, snapTarget, draggedNodeId,
-    fontsLoaded
+    fontsLoaded, selectedNodeIds, setSelectedNodeIds
 }) => {
     const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
     const [isPanning, setIsPanning] = useState(false);
     const [lastMousePosition, setLastMousePosition] = useState<Position | null>(null);
 
-    const [connecting, setConnecting] = useState<{ sourceId: string; sourcePos: Position } | null>(null);
-    const [previewEdgePos, setPreviewEdgePos] = useState<Position | null>(null);
+    const [connecting, setConnecting] = useState<{ sourceId: string; sourcePos: Position; label?: string; } | null>(null);
+    const [reconnecting, setReconnecting] = useState<{ edgeId: string; handle: 'source' | 'target' } | null>(null);
+    const [previewLine, setPreviewLine] = useState<{ start: Position; end: Position } | null>(null);
+    
+    const [selectionBox, setSelectionBox] = useState<{ start: Position; end: Position } | null>(null);
+    const [dragInfo, setDragInfo] = useState<{
+      startMousePos: Position;
+      nodeStartPositions: Map<string, Position>;
+      primaryNodeId: string;
+    } | null>(null);
+
+    const [snapTarget, setSnapTarget] = useState<SnapTarget | null>(null);
+    const [displacedNodeInfo, setDisplacedNodeInfo] = useState<DisplacedNodeInfo | null>(null);
+
 
     const canvasRef = useRef<SVGSVGElement>(null);
     const gRef = useRef<SVGGElement>(null);
@@ -55,21 +76,62 @@ const Canvas: React.FC<CanvasProps> = ({
         return { x: 0, y: 0 };
     }, []);
 
+    const handleNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
+        e.preventDefault();
+        
+        // FIX: Explicitly set the type for the new Set to avoid it being inferred as Set<unknown>.
+        const currentSelection = new Set<string>(selectedNodeIds);
+        let newSelection: Set<string>;
+
+        if (e.shiftKey) {
+            if (currentSelection.has(nodeId)) {
+                currentSelection.delete(nodeId);
+            } else {
+                currentSelection.add(nodeId);
+            }
+            newSelection = currentSelection;
+        } else {
+            if (!currentSelection.has(nodeId)) {
+                newSelection = new Set([nodeId]);
+            } else {
+                newSelection = currentSelection;
+            }
+        }
+        setSelectedNodeIds(newSelection);
+        setSelectedEdgeId(null);
+
+        const nodeStartPositions = new Map<string, Position>();
+        newSelection.forEach(id => {
+            const node = nodes.find(n => n.id === id);
+            if (node) {
+                nodeStartPositions.set(id, node.position);
+            }
+        });
+        
+        setDragInfo({
+            startMousePos: getSVGPoint(e as unknown as MouseEvent),
+            nodeStartPositions,
+            primaryNodeId: nodeId,
+        });
+    };
+
     const handleMouseDown = (e: MouseEvent<SVGSVGElement>) => {
         const target = e.target as SVGElement;
-        
-        const isNodeTarget = target.closest('g.group');
-        const isBackground = target === canvasRef.current || target.parentNode === canvasRef.current;
+        const isNodeTarget = target.closest('.node-group');
+        const isEdgeTarget = target.closest('.group-edge');
 
-        if (isBackground) {
-             setSelectedEdgeId(null);
+        if (!isNodeTarget && !isEdgeTarget) {
+            if (!e.shiftKey) {
+                setSelectedNodeIds(new Set());
+            }
+            setSelectedEdgeId(null);
+            const startPos = getSVGPoint(e);
+            setSelectionBox({ start: startPos, end: startPos });
         }
         
-        // Pan with middle mouse, alt+click, or right-click on background
         if (e.button === 1 || e.altKey || (e.button === 2 && !isNodeTarget)) {
             setIsPanning(true);
             setLastMousePosition({ x: e.clientX, y: e.clientY });
-            (e.currentTarget as SVGSVGElement).style.cursor = 'grabbing';
         }
     };
 
@@ -79,22 +141,125 @@ const Canvas: React.FC<CanvasProps> = ({
             const dy = e.clientY - lastMousePosition.y;
             setView(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
             setLastMousePosition({ x: e.clientX, y: e.clientY });
+            return;
         }
+
+        const currentMousePos = getSVGPoint(e);
+
         if (connecting) {
-            const { x, y } = getSVGPoint(e);
-            setPreviewEdgePos({ x, y });
+            setPreviewLine({ start: connecting.sourcePos, end: currentMousePos });
+        } else if (reconnecting) {
+            const edge = edges.find(e => e.id === reconnecting.edgeId);
+            if (edge) {
+                const isSourceHandle = reconnecting.handle === 'source';
+                const fixedNodeId = isSourceHandle ? edge.target : edge.source;
+                const fixedNode = nodes.find(n => n.id === fixedNodeId);
+                const draggedToNode = { id: 'mouse', type: 'process', position: currentMousePos, text: '' } as NodeData;
+                
+                if (fixedNode) {
+                    const { source: closestPointOnFixedNode } = getClosestConnection(fixedNode, draggedToNode);
+                    setPreviewLine({ start: closestPointOnFixedNode, end: currentMousePos });
+                }
+            }
+        } else if (dragInfo) {
+            const dx = currentMousePos.x - dragInfo.startMousePos.x;
+            const dy = currentMousePos.y - dragInfo.startMousePos.y;
+            
+            const primaryNodeId = dragInfo.primaryNodeId;
+            const isMultiDrag = dragInfo.nodeStartPositions.size > 1;
+
+            if (isMultiDrag) {
+                 setNodes(currentNodes => currentNodes.map(node => {
+                    const startPos = dragInfo.nodeStartPositions.get(node.id);
+                    if (startPos) {
+                        return { ...node, position: { x: startPos.x + dx, y: startPos.y + dy } };
+                    }
+                    return node;
+                 }));
+                 if (snapTarget) setSnapTarget(null);
+                 if (displacedNodeInfo) setDisplacedNodeInfo(null);
+            } else {
+                 const startPos = dragInfo.nodeStartPositions.get(primaryNodeId);
+                 if (startPos) {
+                    const newPosition = { x: startPos.x + dx, y: startPos.y + dy };
+                    handleSingleNodeDrag(primaryNodeId, newPosition);
+                 }
+            }
+        } else if (selectionBox) {
+             setSelectionBox(prev => prev ? { ...prev, end: currentMousePos } : null);
         }
     };
     
+    // FIX: Moved `handleSingleNodeDragEnd` before `endDrag` to fix a declaration error.
+    const handleSingleNodeDragEnd = useCallback((nodeId: string) => {
+        setDisplacedNodeInfo(null);
+        if (snapTarget) {
+            const draggedNode = nodes.find(n => n.id === nodeId);
+            if (!draggedNode) return;
+            
+            setEdges(prevEdges => {
+                const filteredEdges = prevEdges.filter(e => e.id !== snapTarget.edgeId);
+                const newEdge1: EdgeData = {
+                    id: `e-${snapTarget.sourceNodeId}-${draggedNode.id}-${Date.now()}`,
+                    source: snapTarget.sourceNodeId,
+                    target: draggedNode.id,
+                };
+                const newEdge2: EdgeData = {
+                    id: `e-${draggedNode.id}-${snapTarget.targetNodeId}-${Date.now() + 1}`,
+                    source: draggedNode.id,
+                    target: snapTarget.targetNodeId,
+                };
+                return [...filteredEdges, newEdge1, newEdge2];
+            });
+        }
+        setSnapTarget(null);
+    }, [nodes, snapTarget, setEdges]);
+
+    const endDrag = useCallback(() => {
+        if (!dragInfo) return;
+
+        if (dragInfo.nodeStartPositions.size === 1) {
+            handleSingleNodeDragEnd(dragInfo.primaryNodeId);
+        } else {
+            if (snapTarget) setSnapTarget(null);
+        }
+        setDragInfo(null);
+    }, [dragInfo, handleSingleNodeDragEnd, snapTarget]);
+
     const handleMouseUp = (e: MouseEvent<SVGSVGElement>) => {
         if (isPanning) {
             setIsPanning(false);
             setLastMousePosition(null);
-             (e.currentTarget as SVGSVGElement).style.cursor = 'grab';
         }
-        if (connecting) {
+        
+        endDrag();
+        
+        if (selectionBox) {
+            const { start, end } = selectionBox;
+            const x1 = Math.min(start.x, end.x);
+            const y1 = Math.min(start.y, end.y);
+            const x2 = Math.max(start.x, end.x);
+            const y2 = Math.max(start.y, end.y);
+
+            if (Math.abs(start.x - end.x) > 5 || Math.abs(start.y - end.y) > 5) {
+                // FIX: Explicitly set the type for the new Set to avoid it being inferred as Set<unknown>, especially when creating an empty set in the ternary operator.
+                const newlySelected = new Set<string>(e.shiftKey ? selectedNodeIds : undefined);
+                nodes.forEach(node => {
+                    const nodeWidth = node.width || 150;
+                    const nodeHeight = node.height || 70;
+                    if (node.position.x < x2 && node.position.x + nodeWidth > x1 &&
+                        node.position.y < y2 && node.position.y + nodeHeight > y1) {
+                        newlySelected.add(node.id);
+                    }
+                });
+                setSelectedNodeIds(newlySelected);
+            }
+            setSelectionBox(null);
+        }
+        if (connecting || reconnecting) {
             setConnecting(null);
-            setPreviewEdgePos(null);
+            setReconnecting(null);
+            setPreviewLine(null);
         }
     };
 
@@ -112,8 +277,8 @@ const Canvas: React.FC<CanvasProps> = ({
         });
     };
 
-    const startConnecting = useCallback((sourceId: string, sourcePos: Position) => {
-        setConnecting({ sourceId, sourcePos });
+    const startConnecting = useCallback((sourceId: string, sourcePos: Position, label?: string) => {
+        setConnecting({ sourceId, sourcePos, label });
     }, []);
 
     const finishConnecting = useCallback((targetId: string) => {
@@ -129,20 +294,145 @@ const Canvas: React.FC<CanvasProps> = ({
                     target: targetId,
                     sourceHandle: sourceIndex,
                     targetHandle: targetIndex,
+                    label: connecting.label,
                 };
                 setEdges((eds) => [...eds, newEdge]);
             }
         }
         setConnecting(null);
-        setPreviewEdgePos(null);
+        setPreviewLine(null);
     }, [connecting, setEdges, nodes]);
+
+    const startReconnecting = useCallback((edgeId: string, handle: 'source' | 'target') => {
+        setReconnecting({ edgeId, handle });
+        setSelectedEdgeId(edgeId);
+    }, []);
+
+    const finishReconnecting = useCallback((targetNodeId: string) => {
+        if (!reconnecting) return;
+
+        setEdges(prevEdges => {
+            const edgeToUpdate = prevEdges.find(e => e.id === reconnecting.edgeId);
+            if (!edgeToUpdate) return prevEdges;
+
+            const isSourceHandle = reconnecting.handle === 'source';
+            const fixedNodeId = isSourceHandle ? edgeToUpdate.target : edgeToUpdate.source;
+
+            if (fixedNodeId === targetNodeId) {
+                return prevEdges; // Dropped on the same node
+            }
+            
+            const sourceNode = nodes.find(n => n.id === (isSourceHandle ? targetNodeId : fixedNodeId));
+            const targetNode = nodes.find(n => n.id === (isSourceHandle ? fixedNodeId : targetNodeId));
+
+            if (!sourceNode || !targetNode) return prevEdges;
+            
+            const { sourceIndex, targetIndex } = getClosestConnection(sourceNode, targetNode);
+
+            return prevEdges.map(e => {
+                if (e.id === reconnecting.edgeId) {
+                    return {
+                        ...e,
+                        source: sourceNode.id,
+                        target: targetNode.id,
+                        sourceHandle: sourceIndex,
+                        targetHandle: targetIndex,
+                    };
+                }
+                return e;
+            });
+        });
+        setReconnecting(null);
+        setPreviewLine(null);
+    }, [reconnecting, setEdges, nodes]);
+    
+    const handleNodeMouseUp = useCallback((nodeId: string) => {
+        if (connecting) {
+            finishConnecting(nodeId);
+        } else if (reconnecting) {
+            finishReconnecting(nodeId);
+        } else {
+            endDrag();
+        }
+    }, [connecting, reconnecting, finishConnecting, finishReconnecting, endDrag]);
+
+    // --- Snapping and single-node drag logic ---
+    const handleSingleNodeDrag = useCallback((nodeId: string, newPosition: Position) => {
+        updateNodePosition(nodeId, newPosition);
+
+        const draggedNode = nodes.find(n => n.id === nodeId);
+        if (!draggedNode) return;
+
+        const nodeCenter = {
+            x: newPosition.x + (draggedNode.width || 150) / 2,
+            y: newPosition.y + (draggedNode.height || 70) / 2,
+        };
+
+        let intersectedEdge: EdgeData | null = null;
+        let closestDistance = Infinity;
+
+        for (const edge of edges) {
+            if (edge.source === nodeId || edge.target === nodeId) continue;
+            const sourceNode = nodes.find(n => n.id === edge.source);
+            const targetNode = nodes.find(n => n.id === edge.target);
+
+            if (!sourceNode || !targetNode) continue;
+
+            const closest = getClosestConnection(sourceNode, targetNode);
+            const { labelPos } = getCurvePath(closest.source, closest.sourceIndex, closest.target, closest.targetIndex);
+
+            const distance = Math.sqrt(
+                Math.pow(nodeCenter.x - labelPos.x, 2) + Math.pow(nodeCenter.y - labelPos.y, 2)
+            );
+
+            const SNAP_THRESHOLD = 35;
+            if (distance < SNAP_THRESHOLD && distance < closestDistance) {
+                intersectedEdge = edge;
+                closestDistance = distance;
+            }
+        }
+
+        if (intersectedEdge) {
+            if (!snapTarget || snapTarget.edgeId !== intersectedEdge.id) {
+                const sourceNode = nodes.find(n => n.id === intersectedEdge!.source);
+                const targetNode = nodes.find(n => n.id === intersectedEdge!.target);
+
+                if (sourceNode && targetNode) {
+                    const dx = targetNode.position.x - sourceNode.position.x;
+                    const dy = targetNode.position.y - sourceNode.position.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (dist < CROWDED_THRESHOLD) {
+                        const displacement = (draggedNode.width || 150) / 2 + 60;
+                        const newTargetX = targetNode.position.x + (dx / dist) * displacement;
+                        const newTargetY = targetNode.position.y + (dy / dist) * displacement;
+                        
+                        setDisplacedNodeInfo({ nodeId: targetNode.id, originalPosition: targetNode.position });
+                        updateNodePosition(targetNode.id, { x: newTargetX, y: newTargetY });
+                    }
+                }
+            }
+            setSnapTarget({
+                edgeId: intersectedEdge.id,
+                sourceNodeId: intersectedEdge.source,
+                targetNodeId: intersectedEdge.target,
+            });
+
+        } else {
+            if (snapTarget && displacedNodeInfo) {
+                updateNodePosition(displacedNodeInfo.nodeId, displacedNodeInfo.originalPosition);
+                setDisplacedNodeInfo(null);
+            }
+            setSnapTarget(null);
+        }
+    }, [nodes, edges, updateNodePosition, snapTarget, displacedNodeInfo]);
     
     const renderSnapPreview = () => {
-        if (!snapTarget || !draggedNodeId) return null;
+        if (!snapTarget || !dragInfo || dragInfo.nodeStartPositions.size > 1) return null;
 
         const sourceNode = nodes.find(n => n.id === snapTarget.sourceNodeId);
         const targetNode = nodes.find(n => n.id === snapTarget.targetNodeId);
-        const draggedNode = nodes.find(n => n.id === draggedNodeId);
+        const draggedNode = nodes.find(n => n.id === dragInfo.primaryNodeId);
 
         if (!sourceNode || !targetNode || !draggedNode) return null;
 
@@ -159,6 +449,9 @@ const Canvas: React.FC<CanvasProps> = ({
             </g>
         )
     }
+    
+    const selectedEdge = selectedEdgeId ? edges.find(e => e.id === selectedEdgeId) : null;
+    const unselectedEdges = edges.filter(e => e.id !== selectedEdgeId);
 
     return (
         <svg
@@ -166,7 +459,8 @@ const Canvas: React.FC<CanvasProps> = ({
             id="flowchart-canvas"
             width="100%"
             height="100%"
-            className="cursor-grab select-none"
+            className="select-none"
+            style={{ cursor: isPanning || dragInfo ? 'grabbing' : 'grab' }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
@@ -174,7 +468,7 @@ const Canvas: React.FC<CanvasProps> = ({
             onWheel={handleWheel}
             onContextMenu={(e) => {
                 const target = e.target as SVGElement;
-                if (!target.closest('g.group')) {
+                if (!target.closest('.node-group')) {
                     e.preventDefault();
                 }
             }}
@@ -204,32 +498,25 @@ const Canvas: React.FC<CanvasProps> = ({
             <rect width="100%" height="100%" fill="url(#pattern-dots)" />
 
             <g ref={gRef} id="flowchart-group" transform={`translate(${view.x}, ${view.y}) scale(${view.zoom})`}>
-                {edges.map((edge) => (
+                {/* Render unselected edges first */}
+                {unselectedEdges.map((edge) => (
                     <Edge 
                         key={edge.id} 
                         edge={edge} 
                         nodes={nodes} 
                         autoConnect={autoConnect} 
-                        isSelected={edge.id === selectedEdgeId}
+                        isSelected={false}
                         onSelect={setSelectedEdgeId}
                         onDelete={deleteEdge}
                         onUpdateLabel={updateEdgeLabel}
                         isSnapTarget={snapTarget?.edgeId === edge.id}
                         isHidden={snapTarget?.edgeId === edge.id}
+                        isReconnecting={reconnecting?.edgeId === edge.id}
+                        onStartReconnecting={startReconnecting}
                     />
                 ))}
-                {renderSnapPreview()}
-                {connecting && previewEdgePos && (
-                    <line
-                        x1={connecting.sourcePos.x}
-                        y1={connecting.sourcePos.y}
-                        x2={previewEdgePos.x}
-                        y2={previewEdgePos.y}
-                        stroke="#06b6d4"
-                        strokeWidth="2"
-                        strokeDasharray="6,6"
-                    />
-                )}
+
+                {/* Then render all nodes */}
                 {nodes.map((node) => (
                     <Node
                         key={node.id}
@@ -238,18 +525,61 @@ const Canvas: React.FC<CanvasProps> = ({
                         onTextChange={updateNodeText}
                         onDelete={deleteNode}
                         onStartConnecting={startConnecting}
-                        onFinishConnecting={finishConnecting}
+                        onNodeMouseUp={handleNodeMouseUp}
                         onSizeChange={updateNodeDimensions}
                         onOpenContextMenu={onOpenContextMenu}
-                        isConnecting={!!connecting}
+                        isConnecting={!!connecting || !!reconnecting}
                         viewZoom={view.zoom}
                         onInteractionStart={() => setSelectedEdgeId(null)}
-                        onDragStart={onNodeDragStart}
-                        onDrag={onNodeDrag}
-                        onDragEnd={onNodeDragEnd}
+                        onNodeMouseDown={handleNodeMouseDown}
+                        isSelected={selectedNodeIds.has(node.id)}
                         fontsLoaded={fontsLoaded}
                     />
                 ))}
+
+                {/* Then render the selected edge on top */}
+                {selectedEdge && (
+                    <Edge 
+                        key={selectedEdge.id} 
+                        edge={selectedEdge} 
+                        nodes={nodes} 
+                        autoConnect={autoConnect} 
+                        isSelected={true}
+                        onSelect={setSelectedEdgeId}
+                        onDelete={deleteEdge}
+                        onUpdateLabel={updateEdgeLabel}
+                        isSnapTarget={snapTarget?.edgeId === selectedEdge.id}
+                        isHidden={snapTarget?.edgeId === selectedEdge.id}
+                        isReconnecting={reconnecting?.edgeId === selectedEdge.id}
+                        onStartReconnecting={startReconnecting}
+                    />
+                )}
+                
+                {renderSnapPreview()}
+                {previewLine && (
+                    <path
+                        d={getCurvePath(previewLine.start, -1, previewLine.end, -1).path}
+                        stroke="#06b6d4"
+                        strokeWidth="2"
+                        fill="none"
+                        strokeDasharray="6,6"
+                        className="pointer-events-none"
+                    />
+                )}
+                
+                {selectionBox && (
+                    <rect
+                        x={Math.min(selectionBox.start.x, selectionBox.end.x)}
+                        y={Math.min(selectionBox.start.y, selectionBox.end.y)}
+                        width={Math.abs(selectionBox.start.x - selectionBox.end.x)}
+                        height={Math.abs(selectionBox.start.y - selectionBox.end.y)}
+                        fill="rgba(34, 211, 238, 0.2)"
+                        stroke="rgba(34, 211, 238, 0.8)"
+                        strokeWidth={1 / view.zoom}
+                        strokeDasharray={`${4 / view.zoom} ${2 / view.zoom}`}
+                        className="pointer-events-none"
+                    />
+                )}
             </g>
         </svg>
     );

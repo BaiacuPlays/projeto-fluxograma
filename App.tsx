@@ -5,20 +5,6 @@ import Canvas from './components/Canvas';
 import Sidebar from './components/Sidebar';
 import ContextMenu from './components/ContextMenu';
 import { StartIcon, ProcessIcon, DecisionIcon } from './components/Icons';
-import { getCurvePath, getConnectionPoints, getClosestConnection } from './components/Edge';
-
-type SnapTarget = {
-    edgeId: string;
-    sourceNodeId: string;
-    targetNodeId: string;
-};
-
-type DisplacedNodeInfo = {
-    nodeId: string;
-    originalPosition: Position;
-}
-
-const CROWDED_THRESHOLD = 250; // Distância (em pixels) para considerar os nós muito próximos
 
 const defaultDimensions = {
     start: { width: 150, height: 60 },
@@ -109,16 +95,12 @@ const App: React.FC = () => {
   const [nodes, setNodes] = useState<NodeData[]>(initialData.nodes);
   const [edges, setEdges] = useState<EdgeData[]>(initialData.edges);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [autoConnect, setAutoConnect] = useState<boolean>(true);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: NodeData } | null>(null);
-  const [snapTarget, setSnapTarget] = useState<SnapTarget | null>(null);
-  const [draggedNodeId, setDraggedNodeId] = useState<string | null>(null);
-  const [displacedNodeInfo, setDisplacedNodeInfo] = useState<DisplacedNodeInfo | null>(null);
   const [fontsLoaded, setFontsLoaded] = useState(false);
 
   useEffect(() => {
-    // Wait for the custom font to be loaded before allowing auto-sizing calculations.
-    // This prevents a race condition where measurements are taken with a fallback font.
     document.fonts.ready.then(() => {
       setFontsLoaded(true);
     });
@@ -160,6 +142,11 @@ const App: React.FC = () => {
   const deleteNode = useCallback((nodeId: string) => {
     setNodes(nds => nds.filter(n => n.id !== nodeId));
     setEdges(eds => eds.filter(e => e.source !== nodeId && e.target !== nodeId));
+    setSelectedNodeIds(prev => {
+        const next = new Set(prev);
+        next.delete(nodeId);
+        return next;
+    });
     closeContextMenu();
   }, []);
 
@@ -194,16 +181,27 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-        if ((e.key === 'Backspace' || e.key === 'Delete') && selectedEdgeId) {
-            if ((e.target as HTMLElement).tagName.toUpperCase() !== 'INPUT' && (e.target as HTMLElement).tagName.toUpperCase() !== 'TEXTAREA') {
-                e.preventDefault();
+        if ((e.key === 'Backspace' || e.key === 'Delete')) {
+            const activeEl = document.activeElement;
+            if (activeEl && ['INPUT', 'TEXTAREA'].includes(activeEl.tagName)) {
+                return;
             }
-            deleteEdge(selectedEdgeId);
+            e.preventDefault();
+
+            if (selectedEdgeId) {
+                deleteEdge(selectedEdgeId);
+            }
+            if (selectedNodeIds.size > 0) {
+                const nodeIdsToDelete = Array.from(selectedNodeIds);
+                setNodes(nds => nds.filter(n => !nodeIdsToDelete.includes(n.id)));
+                setEdges(eds => eds.filter(e => !nodeIdsToDelete.includes(e.source) && !nodeIdsToDelete.includes(e.target)));
+                setSelectedNodeIds(new Set());
+            }
         }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEdgeId, deleteEdge]);
+  }, [selectedEdgeId, deleteEdge, selectedNodeIds, setNodes, setEdges]);
 
 
   const openContextMenu = (x: number, y: number, node: NodeData) => {
@@ -211,106 +209,6 @@ const App: React.FC = () => {
   };
   
   const closeContextMenu = () => setContextMenu(null);
-
-  const handleNodeDrag = useCallback((nodeId: string, newPosition: Position) => {
-    updateNodePosition(nodeId, newPosition);
-
-    const draggedNode = nodes.find(n => n.id === nodeId);
-    if (!draggedNode) return;
-
-    const nodeCenter = {
-        x: newPosition.x + (draggedNode.width || 150) / 2,
-        y: newPosition.y + (draggedNode.height || 70) / 2,
-    };
-
-    let intersectedEdge: EdgeData | null = null;
-    let closestDistance = Infinity;
-
-    for (const edge of edges) {
-        if (edge.source === nodeId || edge.target === nodeId) continue;
-        const sourceNode = nodes.find(n => n.id === edge.source);
-        const targetNode = nodes.find(n => n.id === edge.target);
-
-        if (!sourceNode || !targetNode) continue;
-
-        const closest = getClosestConnection(sourceNode, targetNode);
-        const { labelPos } = getCurvePath(closest.source, closest.sourceIndex, closest.target, closest.targetIndex);
-
-        const distance = Math.sqrt(
-            Math.pow(nodeCenter.x - labelPos.x, 2) + Math.pow(nodeCenter.y - labelPos.y, 2)
-        );
-
-        const SNAP_THRESHOLD = 35;
-        if (distance < SNAP_THRESHOLD && distance < closestDistance) {
-            intersectedEdge = edge;
-            closestDistance = distance;
-        }
-    }
-
-    // Handle auto-spacing logic
-    if (intersectedEdge) {
-        if (!snapTarget || snapTarget.edgeId !== intersectedEdge.id) {
-             const sourceNode = nodes.find(n => n.id === intersectedEdge!.source);
-             const targetNode = nodes.find(n => n.id === intersectedEdge!.target);
-
-             if (sourceNode && targetNode) {
-                 const dx = targetNode.position.x - sourceNode.position.x;
-                 const dy = targetNode.position.y - sourceNode.position.y;
-                 const dist = Math.sqrt(dx * dx + dy * dy);
-
-                 if (dist < CROWDED_THRESHOLD) {
-                     const displacement = (draggedNode.width || 150) / 2 + 60;
-                     const newTargetX = targetNode.position.x + (dx / dist) * displacement;
-                     const newTargetY = targetNode.position.y + (dy / dist) * displacement;
-                     
-                     setDisplacedNodeInfo({ nodeId: targetNode.id, originalPosition: targetNode.position });
-                     updateNodePosition(targetNode.id, { x: newTargetX, y: newTargetY });
-                 }
-             }
-        }
-        setSnapTarget({
-            edgeId: intersectedEdge.id,
-            sourceNodeId: intersectedEdge.source,
-            targetNodeId: intersectedEdge.target,
-        });
-
-    } else {
-        if (snapTarget && displacedNodeInfo) {
-            updateNodePosition(displacedNodeInfo.nodeId, displacedNodeInfo.originalPosition);
-            setDisplacedNodeInfo(null);
-        }
-        setSnapTarget(null);
-    }
-}, [nodes, edges, updateNodePosition, snapTarget, displacedNodeInfo]);
-
-  const handleNodeDragEnd = useCallback((nodeId: string) => {
-    setDraggedNodeId(null);
-    setDisplacedNodeInfo(null); // Clear displaced info on drop
-    if (snapTarget) {
-        const draggedNode = nodes.find(n => n.id === nodeId);
-        if (!draggedNode) return;
-        
-        setEdges(prevEdges => {
-            const filteredEdges = prevEdges.filter(e => e.id !== snapTarget.edgeId);
-            const newEdge1: EdgeData = {
-                id: `e-${snapTarget.sourceNodeId}-${draggedNode.id}-${Date.now()}`,
-                source: snapTarget.sourceNodeId,
-                target: draggedNode.id,
-            };
-            const newEdge2: EdgeData = {
-                id: `e-${draggedNode.id}-${snapTarget.targetNodeId}-${Date.now() + 1}`,
-                source: draggedNode.id,
-                target: snapTarget.targetNodeId,
-            };
-            return [...filteredEdges, newEdge1, newEdge2];
-        });
-    }
-    setSnapTarget(null);
-  }, [nodes, snapTarget]);
-
-  const handleNodeDragStart = useCallback((nodeId: string) => {
-    setDraggedNodeId(nodeId);
-  }, []);
 
   const handleExportPNG = useCallback(async () => {
     let toPng;
@@ -430,6 +328,8 @@ const App: React.FC = () => {
               if (window.confirm('Isso substituirá o fluxograma atual. Deseja continuar?')) {
                   setNodes(sanitizedData.nodes);
                   setEdges(sanitizedData.edges);
+                  setSelectedNodeIds(new Set());
+                  setSelectedEdgeId(null);
               }
           } catch (error) {
               alert(`Erro ao importar o arquivo: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
@@ -451,6 +351,7 @@ const App: React.FC = () => {
         setNodes([]);
         setEdges([]);
         setSelectedEdgeId(null);
+        setSelectedNodeIds(new Set());
     }
   }, []);
 
@@ -489,12 +390,9 @@ const App: React.FC = () => {
           setSelectedEdgeId={setSelectedEdgeId}
           deleteEdge={deleteEdge}
           updateEdgeLabel={updateEdgeLabel}
-          onNodeDragStart={handleNodeDragStart}
-          onNodeDrag={handleNodeDrag}
-          onNodeDragEnd={handleNodeDragEnd}
-          snapTarget={snapTarget}
-          draggedNodeId={draggedNodeId}
           fontsLoaded={fontsLoaded}
+          selectedNodeIds={selectedNodeIds}
+          setSelectedNodeIds={setSelectedNodeIds}
         />
         <div className="absolute bottom-4 right-4 bg-[#1F2937]/80 backdrop-blur-sm p-3 rounded-lg text-xs text-gray-300 shadow-lg flex items-center gap-6 border border-[#374151]">
             <div className="flex items-center gap-2"><StartIcon className="w-4 h-4 text-green-400"/> Início/Fim</div>

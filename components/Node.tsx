@@ -7,16 +7,15 @@ interface NodeProps {
   onPositionChange: (id: string, position: Position) => void;
   onTextChange: (id: string, text: string) => void;
   onDelete: (id: string) => void;
-  onStartConnecting: (id: string, sourcePos: Position) => void;
-  onFinishConnecting: (id: string) => void;
+  onStartConnecting: (id: string, sourcePos: Position, label?: string) => void;
+  onNodeMouseUp: (id: string) => void;
   onSizeChange: (id: string, dimensions: { width: number; height: number }) => void;
   onOpenContextMenu: (x: number, y: number, node: NodeData) => void;
   isConnecting: boolean;
   viewZoom: number;
   onInteractionStart: () => void;
-  onDragStart: (id: string) => void;
-  onDrag: (id: string, position: Position) => void;
-  onDragEnd: (id: string) => void;
+  onNodeMouseDown: (e: React.MouseEvent, id: string) => void;
+  isSelected: boolean;
   fontsLoaded: boolean;
 }
 
@@ -28,6 +27,11 @@ interface ResizingState {
     startHeight: number;
     startNodeX: number;
     startNodeY: number;
+}
+
+interface ConnectionPoint {
+  pos: Position;
+  label?: string;
 }
 
 const MIN_DIMENSIONS: Record<NodeType, { width: number, height: number }> = {
@@ -47,7 +51,8 @@ const getShape = (type: NodeType, width: number, height: number): React.ReactEle
         case 'process':
             return <rect x="0" y="0" width={width} height={height} rx="8" ry="8"/>;
         case 'decision':
-            return <path d={`M${width / 2} 0 L${width} ${height / 2} L${width / 2} ${height} L0 ${height / 2} Z`} />;
+            const hexOffset = 20;
+            return <path d={`M ${hexOffset} 0 L ${width - hexOffset} 0 L ${width} ${height / 2} L ${width - hexOffset} ${height} L ${hexOffset} ${height} L 0 ${height / 2} Z`} />;
         default:
             return <rect x="0" y="0" width={width} height={height} />;
     }
@@ -60,21 +65,27 @@ const nodeClasses: Record<NodeType, string> = {
     end: 'node-end',
 };
 
-const getConnectionPoints = (type: NodeType, width: number, height: number): Position[] => {
+const getConnectionPoints = (type: NodeType, width: number, height: number): ConnectionPoint[] => {
+    if (type === 'decision') {
+        return [
+            { pos: { x: width / 2, y: 0 } },                  // Top (Entrada)
+            { pos: { x: width, y: height / 2 }, label: 'Sim' }, // Right (Saída)
+            { pos: { x: width / 2, y: height }, label: 'Não' }, // Bottom (Saída)
+        ];
+    }
     return [
-        { x: width / 2, y: 0 },    // Top
-        { x: width, y: height / 2 }, // Right
-        { x: width / 2, y: height }, // Bottom
-        { x: 0, y: height / 2 },     // Left
+        { pos: { x: width / 2, y: 0 } },    // Top
+        { pos: { x: width, y: height / 2 } }, // Right
+        { pos: { x: width / 2, y: height } }, // Bottom
+        { pos: { x: 0, y: height / 2 } },     // Left
     ];
 };
 
 const Node: React.FC<NodeProps> = ({ 
     data, onPositionChange, onTextChange, onDelete, onStartConnecting, 
-    onFinishConnecting, onSizeChange, onOpenContextMenu, isConnecting, viewZoom, 
-    onInteractionStart, onDragStart, onDrag, onDragEnd, fontsLoaded
+    onNodeMouseUp, onSizeChange, onOpenContextMenu, isConnecting, viewZoom, 
+    onInteractionStart, onNodeMouseDown, isSelected, fontsLoaded
 }) => {
-    const [isDragging, setIsDragging] = useState(false);
     const [resizingState, setResizingState] = useState<ResizingState | null>(null);
     const [isEditing, setIsEditing] = useState(false);
     const [editText, setEditText] = useState(data.text);
@@ -95,24 +106,20 @@ const Node: React.FC<NodeProps> = ({
     const { width = minWidth, height = minHeight } = data;
     
     useLayoutEffect(() => {
-        // Aguarda as fontes carregarem e verifica se o modo automático está ativo.
         if (!autoSizeModeRef.current || isEditing || !textRef.current || resizingState || !fontsLoaded) {
             return;
         }
     
         const textEl = textRef.current;
         const paddingX = data.type === 'decision' ? 40 : 20;
-        const paddingY = data.type === 'decision' ? 30 : 20;
+        const paddingY = data.type === 'decision' ? 20 : 20;
     
-        // --- Iniciar Medição ---
-        textEl.style.width = 'auto'; // Deixa o texto fluir para encontrar a largura ideal
+        textEl.style.width = 'auto'; 
         const naturalWidth = textEl.scrollWidth;
         const requiredWidthForText = Math.max(minWidth, naturalWidth + paddingX);
         
-        // Limita a largura a um valor máximo
         const calculatedWidth = Math.min(MAX_WIDTH, requiredWidthForText);
         
-        // Agora, verifica a altura com a largura calculada (após considerar o padding)
         const contentWidth = calculatedWidth - paddingX;
         textEl.style.width = `${contentWidth}px`;
         
@@ -120,17 +127,13 @@ const Node: React.FC<NodeProps> = ({
         
         let calculatedHeight;
         if (data.type === 'decision') {
-            // Losangos precisam de mais espaço vertical
-            const requiredDiamondHeight = (wrappedHeight * 1.5) + (paddingY * 2);
-            calculatedHeight = Math.max(minHeight, requiredDiamondHeight);
+            calculatedHeight = Math.max(minHeight, wrappedHeight + paddingY);
         } else {
             calculatedHeight = Math.max(minHeight, wrappedHeight + paddingY);
         }
         
-        textEl.style.width = ''; // Reseta o estilo para a renderização
-        // --- Fim da Medição ---
+        textEl.style.width = ''; 
     
-        // Se o tamanho calculado for diferente do atual, atualiza.
         if (calculatedWidth !== width || calculatedHeight !== height) {
             onSizeChange(data.id, { width: calculatedWidth, height: calculatedHeight });
         }
@@ -138,13 +141,15 @@ const Node: React.FC<NodeProps> = ({
 
     const connectionPoints = getConnectionPoints(data.type, width, height);
     
+    const alwaysVisibleConnectors = data.type === 'decision' ? connectionPoints.filter(p => p.label) : [];
+    const hoverConnectors = data.type === 'decision' ? connectionPoints.filter(p => !p.label) : connectionPoints;
+
     const shapeComponent = getShape(data.type, width, height);
     const shapeProps: React.SVGProps<any> = {};
 
     if (data.color) {
         shapeProps.stroke = data.color;
         shapeProps.fill = data.color;
-        shapeProps.fillOpacity = "0.3";
     } else {
         shapeProps.fill = `url(#grad-${data.type})`;
     }
@@ -157,14 +162,13 @@ const Node: React.FC<NodeProps> = ({
             target.tagName.toLowerCase() === 'textarea' ||
             target.closest('.delete-button-wrapper') ||
             target.dataset.resizeHandle ||
-            e.button === 2 // right-click
+            e.button === 2
             ) {
             return;
         }
         e.stopPropagation();
         onInteractionStart();
-        setIsDragging(true);
-        onDragStart(data.id);
+        onNodeMouseDown(e, data.id);
     };
 
     const handleResizeMouseDown = (e: React.MouseEvent, handle: string) => {
@@ -183,9 +187,9 @@ const Node: React.FC<NodeProps> = ({
         });
     };
 
-    const handleMouseUp = () => {
-        if (!isConnecting) return;
-        onFinishConnecting(data.id);
+    const handleMouseUp = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        onNodeMouseUp(data.id);
     };
     
     const handleDoubleClick = () => {
@@ -212,14 +216,14 @@ const Node: React.FC<NodeProps> = ({
         }
     }
 
-    const handleConnectorMouseDown = (e: React.MouseEvent, point: Position) => {
+    const handleConnectorMouseDown = (e: React.MouseEvent, point: ConnectionPoint) => {
         e.stopPropagation();
         onInteractionStart();
         const absolutePos = {
-            x: data.position.x + point.x,
-            y: data.position.y + point.y,
+            x: data.position.x + point.pos.x,
+            y: data.position.y + point.pos.y,
         };
-        onStartConnecting(data.id, absolutePos);
+        onStartConnecting(data.id, absolutePos, point.label);
     };
     
     const handleContextMenu = (e: React.MouseEvent) => {
@@ -281,35 +285,6 @@ const Node: React.FC<NodeProps> = ({
         };
     }, [resizingState, onPositionChange, onSizeChange, data.id, data.position, viewZoom, minWidth, minHeight]);
 
-
-    useEffect(() => {
-        const handleMouseMove = (e: MouseEvent) => {
-            if (isDragging) {
-                const newPosition = {
-                    x: data.position.x + e.movementX / viewZoom,
-                    y: data.position.y + e.movementY / viewZoom,
-                };
-                onDrag(data.id, newPosition);
-            }
-        };
-        const handleMouseUpGlobal = () => {
-            if (isDragging) {
-                setIsDragging(false);
-                onDragEnd(data.id);
-            }
-        };
-
-        if (isDragging) {
-            window.addEventListener('mousemove', handleMouseMove);
-            window.addEventListener('mouseup', handleMouseUpGlobal);
-        }
-
-        return () => {
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUpGlobal);
-        };
-    }, [isDragging, data.id, data.position, onDrag, viewZoom, onDragEnd]);
-
     useEffect(() => {
         if (isEditing && textareaRef.current) {
             textareaRef.current.focus();
@@ -317,17 +292,29 @@ const Node: React.FC<NodeProps> = ({
         }
     }, [isEditing]);
     
-     const resizeHandles = [
-        { id: 'top-left', x: -5, y: -5, cursor: 'nwse-resize' },
-        { id: 'top-right', x: width - 5, y: -5, cursor: 'nesw-resize' },
-        { id: 'bottom-left', x: -5, y: height - 5, cursor: 'nesw-resize' },
-        { id: 'bottom-right', x: width - 5, y: height - 5, cursor: 'nwse-resize' },
-    ];
+     const resizeHandles = (() => {
+        if (data.type === 'start' || data.type === 'end') {
+            const r = height / 2;
+            const offset = r * (1 - Math.SQRT1_2);
+            return [
+                { id: 'top-left', x: offset - 5, y: offset - 5, cursor: 'nwse-resize' },
+                { id: 'top-right', x: width - offset - 5, y: offset - 5, cursor: 'nesw-resize' },
+                { id: 'bottom-left', x: offset - 5, y: height - offset - 5, cursor: 'nesw-resize' },
+                { id: 'bottom-right', x: width - offset - 5, y: height - offset - 5, cursor: 'nwse-resize' },
+            ];
+        }
+        return [
+            { id: 'top-left', x: -5, y: -5, cursor: 'nwse-resize' },
+            { id: 'top-right', x: width - 5, y: -5, cursor: 'nesw-resize' },
+            { id: 'bottom-left', x: -5, y: height - 5, cursor: 'nesw-resize' },
+            { id: 'bottom-right', x: width - 5, y: height - 5, cursor: 'nwse-resize' },
+        ];
+    })();
 
     return (
         <g 
             transform={`translate(${data.position.x}, ${data.position.y})`} 
-            className={`group ${isDragging ? 'cursor-grabbing' : 'cursor-grab'} ${resizingState ? 'cursor-[var(--cursor)]' : ''} transition-transform duration-200 ease-out`}
+            className={`group node-group ${resizingState ? 'cursor-[var(--cursor)]' : 'cursor-default'} transition-transform duration-200 ease-out`}
             style={{'--cursor': resizingState ? resizeHandles.find(h => h.id.startsWith(resizingState.handle))?.cursor : 'default'} as React.CSSProperties}
             onMouseDown={handleMouseDown}
             onMouseUp={handleMouseUp}
@@ -337,6 +324,20 @@ const Node: React.FC<NodeProps> = ({
             <g className={`node-shape ${!data.color ? nodeClasses[data.type] : ''} ${isConnecting ? 'hover:stroke-cyan-200 hover:stroke-[3px]' : ''}`}>
                 {styledShape}
             </g>
+
+            {isSelected && (
+                <rect
+                    x={-4} y={-4}
+                    width={width + 8}
+                    height={height + 8}
+                    fill="none"
+                    stroke="var(--color-accent)"
+                    strokeWidth="2"
+                    rx={data.type === 'start' || data.type === 'end' ? (height + 8) / 2 : 12}
+                    strokeDasharray="4 4"
+                    className="pointer-events-none"
+                />
+            )}
 
             {isEditing ? (
                  <foreignObject x="0" y="0" width={width} height={height}>
@@ -357,7 +358,7 @@ const Node: React.FC<NodeProps> = ({
                      <div className="w-full h-full flex items-center justify-center text-center text-white font-medium text-sm break-all p-2 box-border">
                         <div 
                             ref={textRef} 
-                            style={{ maxWidth: data.type === 'decision' ? `${width * 0.7}px` : undefined }}
+                            style={{ maxWidth: data.type === 'decision' ? `${width - 40}px` : undefined }}
                         >
                             {data.text}
                         </div>
@@ -366,23 +367,65 @@ const Node: React.FC<NodeProps> = ({
             )}
 
             {!isEditing && (
-                <g className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                    {connectionPoints.map((point, index) => (
+                <g>
+                    {alwaysVisibleConnectors.map((point, index) => (
                        <g
-                            key={index}
+                            key={`always-${index}`}
                             className="cursor-crosshair group/connector"
                             onMouseDown={(e) => handleConnectorMouseDown(e, point)}
                         >
-                            <circle cx={point.x} cy={point.y} r="12" fill="transparent"/> {/* Hit area */}
+                            <circle cx={point.pos.x} cy={point.pos.y} r="12" fill="transparent"/>
                              <circle
-                                cx={point.x}
-                                cy={point.y}
+                                cx={point.pos.x}
+                                cy={point.pos.y}
                                 r="7"
                                 className="fill-gray-900 stroke-cyan-400 stroke-2 group-hover/connector:stroke-white transition-all duration-200"
                             />
                             <circle
-                                cx={point.x}
-                                cy={point.y}
+                                cx={point.pos.x}
+                                cy={point.pos.y}
+                                r="3.5"
+                                className="fill-cyan-400 group-hover/connector:fill-white transition-all duration-200"
+                            />
+                            {point.label && (
+                                <text
+                                    x={point.pos.x === width ? point.pos.x + 8 : point.pos.x}
+                                    y={point.pos.y === height ? point.pos.y + 14 : point.pos.y}
+                                    textAnchor={point.pos.x === width ? 'start' : 'middle'}
+                                    dominantBaseline="middle"
+                                    className="fill-gray-200 text-xs font-sans font-bold pointer-events-none"
+                                    style={{ fontSize: 14 / viewZoom }}
+                                    paintOrder="stroke"
+                                    stroke="#1F2937"
+                                    strokeWidth={`${6 / viewZoom}px`}
+                                    strokeLinejoin="round"
+                                >
+                                    {point.label}
+                                </text>
+                            )}
+                        </g>
+                    ))}
+                </g>
+            )}
+
+            {!isEditing && (
+                <g className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                    {hoverConnectors.map((point, index) => (
+                       <g
+                            key={`hover-${index}`}
+                            className="cursor-crosshair group/connector"
+                            onMouseDown={(e) => handleConnectorMouseDown(e, point)}
+                        >
+                            <circle cx={point.pos.x} cy={point.pos.y} r="12" fill="transparent"/>
+                             <circle
+                                cx={point.pos.x}
+                                cy={point.pos.y}
+                                r="7"
+                                className="fill-gray-900 stroke-cyan-400 stroke-2 group-hover/connector:stroke-white transition-all duration-200"
+                            />
+                            <circle
+                                cx={point.pos.x}
+                                cy={point.pos.y}
                                 r="3.5"
                                 className="fill-cyan-400 group-hover/connector:fill-white transition-all duration-200"
                             />

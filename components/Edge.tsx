@@ -12,6 +12,8 @@ interface EdgeProps {
   onUpdateLabel: (id: string, label: string) => void;
   isSnapTarget: boolean;
   isHidden: boolean;
+  isReconnecting: boolean;
+  onStartReconnecting: (edgeId: string, handle: 'source' | 'target') => void;
 }
 
 const defaultDimensions = {
@@ -78,22 +80,33 @@ export const getCurvePath = (sourcePos: Position, sourceIndex: number, targetPos
 
     let c1x = sx, c1y = sy;
     let c2x = tx, c2y = ty;
+    
+    const getControlPoint = (pos: Position, index: number, delta: {x: number, y: number}) => {
+        let {x, y} = pos;
+        if (index < 0 || index > 3) { // Preview line logic
+             if (Math.abs(delta.x) > Math.abs(delta.y)) {
+                if (delta.x > 0) x += offset; else x -= offset;
+            } else {
+                if (delta.y > 0) y += offset; else y -= offset;
+            }
+        } else { // Standard logic
+            if (index === 0) y -= offset; // Top
+            if (index === 1) x += offset; // Right
+            if (index === 2) y += offset; // Bottom
+            if (index === 3) x -= offset; // Left
+        }
+        return {x, y};
+    }
 
-    // Control point for source
-    if (sourceIndex === 0) c1y -= offset; // Top
-    if (sourceIndex === 1) c1x += offset; // Right
-    if (sourceIndex === 2) c1y += offset; // Bottom
-    if (sourceIndex === 3) c1x -= offset; // Left
+    const cp1 = getControlPoint({x: sx, y: sy}, sourceIndex, {x: dx, y: dy});
+    c1x = cp1.x; c1y = cp1.y;
 
-    // Control point for target
-    if (targetIndex === 0) c2y -= offset; // Top
-    if (targetIndex === 1) c2x += offset; // Right
-    if (targetIndex === 2) c2y += offset; // Bottom
-    if (targetIndex === 3) c2x -= offset; // Left
+    const cp2 = getControlPoint({x: tx, y: ty}, targetIndex, {x: -dx, y: -dy});
+    c2x = cp2.x; c2y = cp2.y;
+
 
     const path = `M ${sx} ${sy} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${tx} ${ty}`;
     
-    // Approximate midpoint of Bezier curve for label positioning
     const midX = (0.125 * sx) + (0.375 * c1x) + (0.375 * c2x) + (0.125 * tx);
     const midY = (0.125 * sy) + (0.375 * c1y) + (0.375 * c2y) + (0.125 * ty);
 
@@ -101,7 +114,7 @@ export const getCurvePath = (sourcePos: Position, sourceIndex: number, targetPos
 };
 
 
-const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSelect, onDelete, onUpdateLabel, isSnapTarget, isHidden }) => {
+const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSelect, onDelete, onUpdateLabel, isSnapTarget, isHidden, isReconnecting, onStartReconnecting }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [labelText, setLabelText] = useState(edge.label || '');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -113,7 +126,7 @@ const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSel
     }
   }, [isEditing]);
   
-  if (isHidden) return null;
+  if (isHidden || isReconnecting) return null;
 
   const sourceNode = nodes.find((node) => node.id === edge.source);
   const targetNode = nodes.find((node) => node.id === edge.target);
@@ -192,14 +205,36 @@ const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSel
       </defs>
 
       {isSelected && !isEditing && (
-         <foreignObject x={labelPos.x - 12} y={labelPos.y - 12} width="24" height="24" className="overflow-visible pointer-events-auto">
-             <button
-                 onClick={(e) => { e.stopPropagation(); onDelete(edge.id); }}
-                 className="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs transition-opacity focus:outline-none p-1 transform hover:scale-110"
-             >
-                 <TrashIcon />
-             </button>
-         </foreignObject>
+         <>
+            <foreignObject x={labelPos.x - 12} y={labelPos.y - 12} width="24" height="24" className="overflow-visible pointer-events-auto">
+                <button
+                    onClick={(e) => { e.stopPropagation(); onDelete(edge.id); }}
+                    className="w-6 h-6 rounded-full bg-red-600 text-white flex items-center justify-center text-xs transition-opacity focus:outline-none p-1 transform hover:scale-110"
+                >
+                    <TrashIcon />
+                </button>
+            </foreignObject>
+             <circle
+                cx={finalSourcePos.x}
+                cy={finalSourcePos.y}
+                r={8}
+                fill="var(--color-accent)"
+                stroke="#111827"
+                strokeWidth="2"
+                className="cursor-move"
+                onMouseDown={(e) => { e.stopPropagation(); onStartReconnecting(edge.id, 'source'); }}
+            />
+            <circle
+                cx={finalTargetPos.x}
+                cy={finalTargetPos.y}
+                r={8}
+                fill="var(--color-accent)"
+                stroke="#111827"
+                strokeWidth="2"
+                className="cursor-move"
+                onMouseDown={(e) => { e.stopPropagation(); onStartReconnecting(edge.id, 'target'); }}
+            />
+         </>
       )}
 
       {isEditing ? (
