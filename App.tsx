@@ -1,12 +1,13 @@
-
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { NodeData, EdgeData, NodeType, Position, FlowchartData, AnnotationData } from './types';
+import { NodeData, EdgeData, NodeType, Position, FlowchartData, AnnotationData, Project, HistoryState } from './types';
 import Canvas from './components/Canvas';
 import Sidebar from './components/Sidebar';
 import ContextMenu from './components/ContextMenu';
 import PermissionModal from './components/PermissionModal';
+import Tabs from './components/Tabs';
 import { StartIcon, ProcessIcon, DecisionIcon } from './components/Icons';
+import ProjectManagerModal from './components/ProjectManagerModal';
 
 const defaultDimensions = {
     start: { width: 150, height: 60 },
@@ -20,6 +21,18 @@ const nodeTypeTextMap: Record<NodeType, string> = {
     process: 'Processo',
     decision: 'Decisão',
     end: 'Fim',
+};
+
+const createNewProject = (name: string): Project => {
+    const emptyState: HistoryState = { nodes: [], edges: [], annotations: [] };
+    return {
+        id: `project-${Date.now()}`,
+        name,
+        ...emptyState,
+        history: [emptyState],
+        historyIndex: 0,
+        isDirty: false,
+    };
 };
 
 const sanitizeFlowchartData = (data: any): FlowchartData => {
@@ -114,16 +127,59 @@ const sanitizeFlowchartData = (data: any): FlowchartData => {
     return { nodes: sanitizedNodes, edges: sanitizedEdges, annotations: sanitizedAnnotations };
 };
 
-const loadInitialData = (): FlowchartData => {
-  try {
-    const saved = window.localStorage.getItem('flowchart-autosave');
-    if (saved) {
-      return sanitizeFlowchartData(JSON.parse(saved));
+const loadInitialData = (): { projects: Project[], openProjectIds: string[], activeProjectId: string | null } => {
+    try {
+        const savedProjects = window.localStorage.getItem('flowchart-projects');
+        const savedOpenIds = window.localStorage.getItem('flowchart-open-ids');
+        const savedActiveId = window.localStorage.getItem('flowchart-active-project-id');
+
+        let projects: Project[] = [];
+        if (savedProjects) {
+            const parsed = JSON.parse(savedProjects);
+            if (Array.isArray(parsed)) {
+                projects = parsed.map(p => ({ ...p, isDirty: p.isDirty ?? false }));
+            }
+        }
+
+        if (projects.length === 0) {
+            const firstProject = createNewProject('Meu Primeiro Fluxograma');
+            return {
+                projects: [firstProject],
+                openProjectIds: [firstProject.id],
+                activeProjectId: firstProject.id,
+            };
+        }
+
+        let openProjectIds: string[] = [];
+        if (savedOpenIds) {
+            const parsed = JSON.parse(savedOpenIds);
+            if (Array.isArray(parsed)) {
+                openProjectIds = parsed.filter(id => projects.some(p => p.id === id));
+            }
+        }
+        
+        if (openProjectIds.length === 0) {
+            openProjectIds = [projects[0].id];
+        }
+
+        let activeProjectId: string | null = null;
+        if (savedActiveId && openProjectIds.includes(savedActiveId)) {
+            activeProjectId = savedActiveId;
+        } else {
+            activeProjectId = openProjectIds[0] || null;
+        }
+
+        return { projects, openProjectIds, activeProjectId };
+
+    } catch (error) {
+        console.error("Falha ao carregar dados do armazenamento local.", error);
+        const firstProject = createNewProject('Meu Primeiro Fluxograma');
+        return {
+            projects: [firstProject],
+            openProjectIds: [firstProject.id],
+            activeProjectId: firstProject.id,
+        };
     }
-  } catch (error) {
-    console.error("Falha ao carregar o fluxograma do armazenamento local.", error);
-  }
-  return { nodes: [], edges: [], annotations: [] };
 };
 
 const getInitialTheme = (): 'light' | 'dark' => {
@@ -131,16 +187,31 @@ const getInitialTheme = (): 'light' | 'dark' => {
   if (savedTheme === 'light' || savedTheme === 'dark') {
     return savedTheme;
   }
-  // Remove a detecção de preferência do sistema para definir o escuro como padrão.
   return 'dark';
 };
 
+const saveDataToLocalStorage = (projects: Project[], openProjectIds: string[], activeId: string | null) => {
+    try {
+        localStorage.setItem('flowchart-projects', JSON.stringify(projects));
+        localStorage.setItem('flowchart-open-ids', JSON.stringify(openProjectIds));
+        if (activeId) {
+            localStorage.setItem('flowchart-active-project-id', activeId);
+        } else {
+            localStorage.removeItem('flowchart-active-project-id');
+        }
+    } catch (error) {
+        console.error("Falha ao salvar dados no armazenamento local.", error);
+    }
+};
 
 const App: React.FC = () => {
-  const [initialFlowchartData] = useState(loadInitialData);
-  const [nodes, setNodes] = useState<NodeData[]>(initialFlowchartData.nodes);
-  const [edges, setEdges] = useState<EdgeData[]>(initialFlowchartData.edges);
-  const [annotations, setAnnotations] = useState<AnnotationData[]>(initialFlowchartData.annotations || []);
+  const [initialData] = useState(loadInitialData);
+  const [projects, setProjects] = useState<Project[]>(initialData.projects);
+  const [openProjectIds, setOpenProjectIds] = useState<string[]>(initialData.openProjectIds);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(initialData.activeProjectId);
+
+  const activeProject = projects.find(p => p.id === activeProjectId);
+  const openProjects = openProjectIds.map(id => projects.find(p => p.id === id)).filter((p): p is Project => !!p);
   
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
@@ -151,9 +222,8 @@ const App: React.FC = () => {
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(getInitialTheme);
+  const [isProjectManagerOpen, setIsProjectManagerOpen] = useState(false);
 
-  const [history, setHistory] = useState<FlowchartData[]>([initialFlowchartData]);
-  const [historyIndex, setHistoryIndex] = useState(0);
   const isRestoring = useRef(false);
   const debounceTimeout = useRef<number | null>(null);
 
@@ -176,8 +246,14 @@ const App: React.FC = () => {
     }
   }, [theme]);
   
+  // Auto-save projects and session state
   useEffect(() => {
-      if (isRestoring.current) {
+    saveDataToLocalStorage(projects, openProjectIds, activeProjectId);
+  }, [projects, openProjectIds, activeProjectId]);
+
+  // History management
+  useEffect(() => {
+      if (!activeProject || isRestoring.current) {
         isRestoring.current = false;
         return;
       }
@@ -187,23 +263,29 @@ const App: React.FC = () => {
       }
 
       debounceTimeout.current = window.setTimeout(() => {
-        const currentState = { nodes, edges, annotations };
-        const lastState = history[historyIndex];
+        const currentState: HistoryState = { 
+            nodes: activeProject.nodes, 
+            edges: activeProject.edges, 
+            annotations: activeProject.annotations 
+        };
+        const lastState = activeProject.history[activeProject.historyIndex];
         
         if (JSON.stringify(currentState) === JSON.stringify(lastState)) {
             return;
         }
         
-        const newHistory = history.slice(0, historyIndex + 1);
-        
-        setHistory([...newHistory, currentState]);
-        setHistoryIndex(newHistory.length);
-
-        try {
-            localStorage.setItem('flowchart-autosave', JSON.stringify(currentState));
-        } catch (error) {
-            console.error("Falha ao salvar o fluxograma no armazenamento local.", error);
-        }
+        setProjects(prevProjects => prevProjects.map(p => {
+            if (p.id === activeProjectId) {
+                const newHistory = p.history.slice(0, p.historyIndex + 1);
+                return {
+                    ...p,
+                    history: [...newHistory, currentState],
+                    historyIndex: newHistory.length,
+                    isDirty: true,
+                };
+            }
+            return p;
+        }));
       }, 500);
 
       return () => {
@@ -211,31 +293,28 @@ const App: React.FC = () => {
           clearTimeout(debounceTimeout.current);
         }
       };
-    }, [nodes, edges, annotations, history, historyIndex]);
+    }, [activeProject?.nodes, activeProject?.edges, activeProject?.annotations, activeProjectId]);
+
+  const updateActiveProject = useCallback((updater: (project: Project) => Project) => {
+    if (!activeProjectId) return;
+    setProjects(prev => prev.map(p => p.id === activeProjectId ? updater(p) : p));
+  }, [activeProjectId]);
 
   const handleUndo = useCallback(() => {
-    if (historyIndex > 0) {
-        isRestoring.current = true;
-        const newIndex = historyIndex - 1;
-        setHistoryIndex(newIndex);
-        const prevState = history[newIndex];
-        setNodes(prevState.nodes);
-        setEdges(prevState.edges);
-        setAnnotations(prevState.annotations || []);
-    }
-  }, [history, historyIndex]);
+    if (!activeProject || activeProject.historyIndex <= 0) return;
+    isRestoring.current = true;
+    const newIndex = activeProject.historyIndex - 1;
+    const prevState = activeProject.history[newIndex];
+    updateActiveProject(p => ({ ...p, ...prevState, historyIndex: newIndex, isDirty: true }));
+  }, [activeProject, updateActiveProject]);
 
   const handleRedo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-        isRestoring.current = true;
-        const newIndex = historyIndex + 1;
-        setHistoryIndex(newIndex);
-        const nextState = history[newIndex];
-        setNodes(nextState.nodes);
-        setEdges(nextState.edges);
-        setAnnotations(nextState.annotations || []);
-    }
-  }, [history, historyIndex]);
+    if (!activeProject || activeProject.historyIndex >= activeProject.history.length - 1) return;
+    isRestoring.current = true;
+    const newIndex = activeProject.historyIndex + 1;
+    const nextState = activeProject.history[newIndex];
+    updateActiveProject(p => ({ ...p, ...nextState, historyIndex: newIndex, isDirty: true }));
+  }, [activeProject, updateActiveProject]);
 
   const addNode = useCallback((type: NodeType) => {
     const GRID_SIZE = 20;
@@ -250,8 +329,8 @@ const App: React.FC = () => {
       text: nodeTypeTextMap[type],
       position: finalPos,
     };
-    setNodes((nds) => [...nds, newNode]);
-  }, [snapToGrid]);
+    updateActiveProject(p => ({ ...p, nodes: [...p.nodes, newNode] }));
+  }, [snapToGrid, updateActiveProject]);
 
   const addAnnotation = useCallback(() => {
     const GRID_SIZE = 20;
@@ -265,144 +344,106 @@ const App: React.FC = () => {
       text: 'Clique duas vezes para editar...',
       position: finalPos,
     };
-    setAnnotations((anns) => [...anns, newAnnotation]);
-  }, [snapToGrid]);
+    updateActiveProject(p => ({ ...p, annotations: [...p.annotations, newAnnotation] }));
+  }, [snapToGrid, updateActiveProject]);
 
-  const updateAnnotationPosition = useCallback((id: string, position: Position) => {
-    setAnnotations((prev) => prev.map((ann) => ann.id === id ? { ...ann, position } : ann));
-  }, []);
-
-  const updateAnnotationText = useCallback((id: string, text: string) => {
-    setAnnotations((prev) => prev.map((ann) => ann.id === id ? { ...ann, text } : ann));
-  }, []);
-
-  const updateAnnotationDimensions = useCallback((id: string, dimensions: { width: number; height: number }) => {
-    setAnnotations((prev) => prev.map((ann) => ann.id === id ? { ...ann, ...dimensions } : ann));
-  }, []);
-
-  const deleteAnnotation = useCallback((id: string) => {
-    setAnnotations((prev) => prev.filter((ann) => ann.id !== id));
-  }, []);
-
+  const setNodes = useCallback((updater: React.SetStateAction<NodeData[]>) => {
+    updateActiveProject(p => ({...p, nodes: typeof updater === 'function' ? updater(p.nodes) : updater }));
+  }, [updateActiveProject]);
+  const setEdges = useCallback((updater: React.SetStateAction<EdgeData[]>) => {
+    updateActiveProject(p => ({...p, edges: typeof updater === 'function' ? updater(p.edges) : updater }));
+  }, [updateActiveProject]);
+  const setAnnotations = useCallback((updater: React.SetStateAction<AnnotationData[]>) => {
+    updateActiveProject(p => ({...p, annotations: typeof updater === 'function' ? updater(p.annotations) : updater }));
+  }, [updateActiveProject]);
 
   const updateNodePosition = useCallback((id: string, position: { x: number; y: number }) => {
-    setNodes((prevNodes) =>
-      prevNodes.map((node) =>
-        node.id === id ? { ...node, position } : node
-      )
-    );
-  }, []);
+    setNodes(prev => prev.map(node => node.id === id ? { ...node, position } : node));
+  }, [setNodes]);
 
   const updateNodeText = useCallback((id: string, text: string) => {
-    setNodes((prevNodes) =>
-      prevNodes.map((node) =>
-        node.id === id ? { ...node, text } : node
-      )
-    );
-  }, []);
+    setNodes(prev => prev.map(node => node.id === id ? { ...node, text } : node));
+  }, [setNodes]);
 
   const updateNodeDimensions = useCallback((id: string, dimensions: { width: number, height: number }) => {
-    setNodes((prevNodes) =>
-        prevNodes.map((node) =>
-            node.id === id ? { ...node, ...dimensions } : node
-        )
-    );
-  }, []);
+    setNodes(prev => prev.map(node => node.id === id ? { ...node, ...dimensions } : node));
+  }, [setNodes]);
   
   const deleteNode = useCallback((nodeId: string) => {
-    setNodes(nds => nds.filter(n => n.id !== nodeId));
-    setEdges(eds => eds.filter(e => e.source !== nodeId && e.target !== nodeId));
+    updateActiveProject(p => ({
+        ...p,
+        nodes: p.nodes.filter(n => n.id !== nodeId),
+        edges: p.edges.filter(e => e.source !== nodeId && e.target !== nodeId),
+    }));
     setSelectedNodeIds(prev => {
         const next = new Set(prev);
         next.delete(nodeId);
         return next;
     });
     closeContextMenu();
-  }, []);
+  }, [updateActiveProject]);
 
   const deleteEdge = useCallback((edgeId: string) => {
     setEdges(eds => eds.filter(e => e.id !== edgeId));
     setSelectedEdgeId(null);
-  }, []);
+  }, [setEdges]);
   
   const updateEdgeLabel = useCallback((edgeId: string, label: string) => {
     setEdges(eds => eds.map(e => e.id === edgeId ? { ...e, label } : e));
-  }, []);
+  }, [setEdges]);
 
   const removeNodeConnections = useCallback((nodeId: string) => {
     setEdges(eds => eds.filter(e => e.source !== nodeId && e.target !== nodeId));
     closeContextMenu();
-  }, []);
+  }, [setEdges]);
 
   const updateNodeType = useCallback((nodeId: string, type: NodeType) => {
     setNodes(nds => nds.map(n => n.id === nodeId ? { ...n, type, color: undefined } : n));
     closeContextMenu();
-  }, []);
+  }, [setNodes]);
   
   const updateNodeColor = useCallback((nodeId: string, color?: string) => {
     setNodes(nds => nds.map(n => n.id === nodeId ? { ...n, color } : n));
     closeContextMenu();
-  }, []);
+  }, [setNodes]);
   
   const resetNodeSize = useCallback((nodeId: string) => {
     setNodes(nds => nds.map(n => n.id === nodeId ? { ...n, width: undefined, height: undefined } : n));
     closeContextMenu();
-  }, []);
+  }, [setNodes]);
 
   const handleAddChild = useCallback((parentNodeId: string) => {
-    const parentNode = nodes.find(n => n.id === parentNodeId);
+    if (!activeProject) return;
+    const parentNode = activeProject.nodes.find(n => n.id === parentNodeId);
     if (!parentNode) return;
 
     const GRID_SIZE = 20;
     const snap = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
-
     const parentHeight = parentNode.height ?? defaultDimensions[parentNode.type].height;
-
-    const initialPos = { 
-      x: parentNode.position.x, 
-      y: parentNode.position.y + parentHeight + 80
-    };
+    const initialPos = { x: parentNode.position.x, y: parentNode.position.y + parentHeight + 80 };
     const finalPos = snapToGrid ? { x: snap(initialPos.x), y: snap(initialPos.y) } : initialPos;
 
     const newNode: NodeData = {
       id: `${parentNode.type}-${Date.now()}${Math.round(Math.random() * 100)}`,
-      type: parentNode.type,
-      text: nodeTypeTextMap[parentNode.type],
-      position: finalPos,
-      color: parentNode.color,
+      type: parentNode.type, text: nodeTypeTextMap[parentNode.type], position: finalPos, color: parentNode.color,
     };
-
     const newEdge: EdgeData = {
-      id: `e-${parentNode.id}-${newNode.id}-${Date.now()}`,
-      source: parentNode.id,
-      target: newNode.id,
+      id: `e-${parentNode.id}-${newNode.id}-${Date.now()}`, source: parentNode.id, target: newNode.id,
     };
     
-    setNodes(nds => [...nds, newNode]);
-    setEdges(eds => [...eds, newEdge]);
+    updateActiveProject(p => ({ ...p, nodes: [...p.nodes, newNode], edges: [...p.edges, newEdge] }));
     closeContextMenu();
-  }, [nodes, snapToGrid]);
+  }, [activeProject, snapToGrid, updateActiveProject]);
 
   const handleCopy = useCallback(() => {
-    if (selectedNodeIds.size === 0) return;
-
-    const selectedNodes = nodes.filter(n => selectedNodeIds.has(n.id));
-    const selectedEdges = edges.filter(e => selectedNodeIds.has(e.source) && selectedNodeIds.has(e.target));
-    
-    const dataToCopy = {
-        type: 'flowchart-copy-data',
-        data: {
-            nodes: selectedNodes,
-            edges: selectedEdges,
-        },
-    };
-
-    navigator.clipboard.writeText(JSON.stringify(dataToCopy))
-        .catch(err => {
-            console.error('Falha ao copiar para a área de transferência:', err);
-            alert('Não foi possível copiar os blocos. Verifique as permissões do navegador.');
-        });
-  }, [nodes, edges, selectedNodeIds]);
+    if (selectedNodeIds.size === 0 || !activeProject) return;
+    const selectedNodes = activeProject.nodes.filter(n => selectedNodeIds.has(n.id));
+    const selectedEdges = activeProject.edges.filter(e => selectedNodeIds.has(e.source) && selectedNodeIds.has(e.target));
+    const dataToCopy = { type: 'flowchart-copy-data', data: { nodes: selectedNodes, edges: selectedEdges } };
+    navigator.clipboard.writeText(JSON.stringify(dataToCopy)).catch(err => {
+        console.error('Falha ao copiar:', err); alert('Não foi possível copiar os blocos.');
+    });
+  }, [activeProject, selectedNodeIds]);
 
   const handlePaste = useCallback(async () => {
     try {
@@ -411,111 +452,61 @@ const App: React.FC = () => {
           setIsPermissionModalOpen(true);
           return;
         }
-
         const clipboardText = await navigator.clipboard.readText();
         const clipboardData = JSON.parse(clipboardText);
-
-        if (clipboardData?.type !== 'flowchart-copy-data' || !clipboardData.data) {
-            return;
-        }
-
+        if (clipboardData?.type !== 'flowchart-copy-data' || !clipboardData.data) return;
         const pastedFlowchart: FlowchartData = clipboardData.data;
-        if (!Array.isArray(pastedFlowchart.nodes) || pastedFlowchart.nodes.length === 0) {
-            return;
-        }
+        if (!Array.isArray(pastedFlowchart.nodes) || pastedFlowchart.nodes.length === 0) return;
         
         const idMap = new Map<string, string>();
         const newNodes: NodeData[] = [];
         const newEdges: EdgeData[] = [];
-
         pastedFlowchart.nodes.forEach(node => {
             const newId = `${node.type}-${Date.now()}${Math.round(Math.random() * 1000)}`;
             idMap.set(node.id, newId);
-            newNodes.push({
-                ...node,
-                id: newId,
-                position: {
-                    x: node.position.x + 30,
-                    y: node.position.y + 30,
-                },
-            });
+            newNodes.push({ ...node, id: newId, position: { x: node.position.x + 30, y: node.position.y + 30 } });
         });
-        
         if (Array.isArray(pastedFlowchart.edges)) {
             pastedFlowchart.edges.forEach(edge => {
                 const newSourceId = idMap.get(edge.source);
                 const newTargetId = idMap.get(edge.target);
-                
                 if (newSourceId && newTargetId) {
-                    newEdges.push({
-                        ...edge,
-                        id: `e-${newSourceId}-${newTargetId}-${Date.now()}${Math.round(Math.random() * 1000)}`,
-                        source: newSourceId,
-                        target: newTargetId,
-                    });
+                    newEdges.push({ ...edge, id: `e-${newSourceId}-${newTargetId}-${Date.now()}`, source: newSourceId, target: newTargetId });
                 }
             });
         }
-
-        setNodes(nds => [...nds, ...newNodes]);
-        setEdges(eds => [...eds, ...newEdges]);
-        
+        updateActiveProject(p => ({ ...p, nodes: [...p.nodes, ...newNodes], edges: [...p.edges, ...newEdges] }));
         setSelectedNodeIds(new Set(newNodes.map(n => n.id)));
         setSelectedEdgeId(null);
         setSelectedAnnotationIds(new Set());
-        
-    } catch (err) {
-        console.warn('Falha ao colar da área de transferência:', err);
-    }
-  }, [setNodes, setEdges, setSelectedNodeIds, setSelectedEdgeId]);
+    } catch (err) { console.warn('Falha ao colar:', err); }
+  }, [updateActiveProject]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
         const activeEl = document.activeElement;
         const isTyping = activeEl && ['INPUT', 'TEXTAREA'].includes(activeEl.tagName);
-
         if (isTyping) return;
-
         const isMac = navigator.platform.toUpperCase().includes('MAC');
         const isCopy = (isMac ? e.metaKey : e.ctrlKey) && e.key === 'c';
         const isPaste = (isMac ? e.metaKey : e.ctrlKey) && e.key === 'v';
         const isDelete = e.key === 'Backspace' || e.key === 'Delete';
         const isUndo = (isMac ? e.metaKey : e.ctrlKey) && e.key === 'z';
         const isRedo = (isMac ? e.metaKey : e.ctrlKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'));
-
-        if (isUndo) {
-            e.preventDefault();
-            handleUndo();
-            return;
-        }
-
-        if (isRedo) {
-            e.preventDefault();
-            handleRedo();
-            return;
-        }
-
-        if (isCopy) {
-            e.preventDefault();
-            handleCopy();
-            return;
-        }
-
-        if (isPaste) {
-            e.preventDefault();
-            handlePaste();
-            return;
-        }
-
+        if (isUndo) { e.preventDefault(); handleUndo(); return; }
+        if (isRedo) { e.preventDefault(); handleRedo(); return; }
+        if (isCopy) { e.preventDefault(); handleCopy(); return; }
+        if (isPaste) { e.preventDefault(); handlePaste(); return; }
         if (isDelete) {
             e.preventDefault();
-            if (selectedEdgeId) {
-                deleteEdge(selectedEdgeId);
-            }
+            if (selectedEdgeId) deleteEdge(selectedEdgeId);
             if (selectedNodeIds.size > 0) {
                 const nodeIdsToDelete = Array.from(selectedNodeIds);
-                setNodes(nds => nds.filter(n => !nodeIdsToDelete.includes(n.id)));
-                setEdges(eds => eds.filter(e => !nodeIdsToDelete.includes(e.source) && !nodeIdsToDelete.includes(e.target)));
+                updateActiveProject(p => ({
+                    ...p,
+                    nodes: p.nodes.filter(n => !nodeIdsToDelete.includes(n.id)),
+                    edges: p.edges.filter(edge => !nodeIdsToDelete.includes(edge.source) && !nodeIdsToDelete.includes(edge.target))
+                }));
                 setSelectedNodeIds(new Set());
             }
              if (selectedAnnotationIds.size > 0) {
@@ -527,175 +518,205 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEdgeId, deleteEdge, selectedNodeIds, selectedAnnotationIds, handleCopy, handlePaste, setNodes, setEdges, setAnnotations, handleUndo, handleRedo]);
+  }, [selectedEdgeId, deleteEdge, selectedNodeIds, selectedAnnotationIds, handleCopy, handlePaste, handleUndo, handleRedo, updateActiveProject, setAnnotations]);
 
-
-  const openContextMenu = (x: number, y: number, node: NodeData) => {
-    setContextMenu({ x, y, node });
-  };
-  
+  const openContextMenu = (x: number, y: number, node: NodeData) => setContextMenu({ x, y, node });
   const closeContextMenu = () => setContextMenu(null);
 
   const handleExportPNG = useCallback(async () => {
+    if (!activeProject) return;
     let toPng;
     try {
         const module = await import('https://esm.sh/html-to-image@1.11.11');
         toPng = module.toPng || (module.default && module.default.toPng);
-        if (typeof toPng !== 'function') {
-           throw new Error('A função "toPng" não foi encontrada no módulo de exportação de imagem.');
-        }
+        if (typeof toPng !== 'function') throw new Error('toPng not found');
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        alert(`Não foi possível carregar a biblioteca de exportação de imagens. Verifique sua conexão com a internet e desative bloqueadores de conteúdo. Erro: ${errorMessage}`);
-        console.error('Falha ao carregar html-to-image:', error);
+        alert(`Falha ao carregar biblioteca de exportação: ${error instanceof Error ? error.message : String(error)}`);
         return;
     }
-
     const svgElement = document.getElementById('flowchart-canvas');
-    if (!svgElement) {
-        alert('Elemento do canvas não encontrado.');
-        return;
-    }
-
+    if (!svgElement) { alert('Canvas não encontrado.'); return; }
     const gElement = svgElement.querySelector<SVGGElement>('#flowchart-group');
-    if (!gElement) {
-        alert('Elemento de grupo do fluxograma não encontrado para exportação.');
-        return;
+    if (!gElement) { alert('Grupo do fluxograma não encontrado.'); return; }
+    if (activeProject.nodes.length === 0 && activeProject.annotations.length === 0) {
+        alert("Não há nada para exportar!"); return;
     }
-
-    if (nodes.length === 0 && annotations.length === 0) {
-        alert("Não há nada para exportar!");
-        return;
-    }
-
-    const PADDING = 50;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-    nodes.forEach(node => {
+    const PADDING = 50; let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    activeProject.nodes.forEach(node => {
         const nodeWidth = node.width ?? defaultDimensions[node.type].width;
         const nodeHeight = node.height ?? defaultDimensions[node.type].height;
-        minX = Math.min(minX, node.position.x);
-        minY = Math.min(minY, node.position.y);
-        maxX = Math.max(maxX, node.position.x + nodeWidth);
-        maxY = Math.max(maxY, node.position.y + nodeHeight);
+        minX = Math.min(minX, node.position.x); minY = Math.min(minY, node.position.y);
+        maxX = Math.max(maxX, node.position.x + nodeWidth); maxY = Math.max(maxY, node.position.y + nodeHeight);
     });
-
-    annotations.forEach(ann => {
-        minX = Math.min(minX, ann.position.x);
-        minY = Math.min(minY, ann.position.y);
-        maxX = Math.max(maxX, ann.position.x + (ann.width || 160));
-        maxY = Math.max(maxY, ann.position.y + (ann.height || 120));
+    activeProject.annotations.forEach(ann => {
+        minX = Math.min(minX, ann.position.x); minY = Math.min(minY, ann.position.y);
+        maxX = Math.max(maxX, ann.position.x + (ann.width || 160)); maxY = Math.max(maxY, ann.position.y + (ann.height || 120));
     });
-
-    const contentWidth = maxX - minX;
-    const contentHeight = maxY - minY;
-    const exportWidth = contentWidth + PADDING * 2;
-    const exportHeight = contentHeight + PADDING * 2;
-    
-    const originalBackground = svgElement.querySelector<SVGRectElement>('rect[fill^="url(#pattern-dots)"]');
-    
+    const exportWidth = (maxX - minX) + PADDING * 2; const exportHeight = (maxY - minY) + PADDING * 2;
     const originalTransform = gElement.getAttribute('transform');
     gElement.setAttribute('transform', `translate(${-minX + PADDING}, ${-minY + PADDING}) scale(1)`);
-
     svgElement.classList.add('exporting');
-    if (originalBackground) originalBackground.style.display = 'none';
-
     try {
         const fontURL = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap';
-        const fontCSS = await fetch(fontURL).then(response => response.text());
-        
+        const fontCSS = await fetch(fontURL).then(res => res.text());
         const dataUrl = await toPng(svgElement, {
-            width: exportWidth,
-            height: exportHeight,
-            backgroundColor: theme === 'dark' ? '#111827' : '#F9FAFB',
-            fontEmbedCSS: fontCSS,
+            width: exportWidth, height: exportHeight,
+            backgroundColor: theme === 'dark' ? '#111827' : '#F9FAFB', fontEmbedCSS: fontCSS,
         });
-        
         const link = document.createElement('a');
-        link.download = 'fluxograma.png';
-        link.href = dataUrl;
-        link.click();
+        link.download = `${activeProject.name.replace(/\s+/g, '_') || 'fluxograma'}.png`;
+        link.href = dataUrl; link.click();
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error('Erro ao exportar para PNG:', error);
-        alert(`Ocorreu um erro ao exportar o PNG: ${errorMessage}`);
+        alert(`Erro ao exportar PNG: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
         svgElement.classList.remove('exporting');
-        if (originalBackground) originalBackground.style.display = '';
-        if (originalTransform) {
-            gElement.setAttribute('transform', originalTransform);
-        } else {
-            gElement.removeAttribute('transform');
-        }
+        if (originalTransform) gElement.setAttribute('transform', originalTransform);
+        else gElement.removeAttribute('transform');
     }
-}, [nodes, annotations, theme]);
-
+}, [activeProject, theme]);
 
   const handleExportJSON = useCallback(() => {
-      const data = { nodes, edges, annotations };
-      const jsonString = JSON.stringify(data, null, 2);
-      const blob = new Blob([jsonString], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.download = 'fluxograma.json';
-      link.href = url;
-      link.click();
-      URL.revokeObjectURL(url);
-  }, [nodes, edges, annotations]);
+    if (!activeProject) return;
+    const data: FlowchartData = { nodes: activeProject.nodes, edges: activeProject.edges, annotations: activeProject.annotations };
+    const jsonString = JSON.stringify(data, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = `${activeProject.name.replace(/\s+/g, '_') || 'fluxograma'}.json`;
+    link.href = url; link.click(); URL.revokeObjectURL(url);
+  }, [activeProject]);
 
   const handleImportJSON = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      const input = event.target;
-      if (!file) return;
-
-      const reader = new FileReader();
-      
-      reader.onload = (e) => {
-          try {
-              const result = e.target?.result;
-              if (typeof result !== 'string') throw new Error('Falha ao ler o arquivo.');
-              
-              const parsedData = JSON.parse(result);
-              const sanitizedData = sanitizeFlowchartData(parsedData);
-              
-              if (window.confirm('Isso substituirá o fluxograma atual. Deseja continuar?')) {
-                  setNodes(sanitizedData.nodes);
-                  setEdges(sanitizedData.edges);
-                  setAnnotations(sanitizedData.annotations || []);
-                  setHistory([sanitizedData]);
-                  setHistoryIndex(0);
-                  setSelectedNodeIds(new Set());
-                  setSelectedEdgeId(null);
-                  setSelectedAnnotationIds(new Set());
-              }
-          } catch (error) {
-              alert(`Erro ao importar o arquivo: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
-          } finally {
-              if (input) input.value = '';
-          }
-      };
-
-      reader.onerror = () => {
-        alert('Ocorreu um erro ao ler o arquivo.');
-        if (input) input.value = '';
-      };
-      
-      reader.readAsText(file);
-  }, []);
+    const file = event.target.files?.[0];
+    const input = event.target;
+    if (!file || !activeProjectId) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            if (typeof e.target?.result !== 'string') throw new Error('Falha ao ler o arquivo.');
+            const sanitizedData = sanitizeFlowchartData(JSON.parse(e.target.result));
+            if (window.confirm('Isso substituirá o fluxograma ATUAL. Deseja continuar?')) {
+                const newState: HistoryState = { nodes: sanitizedData.nodes, edges: sanitizedData.edges, annotations: sanitizedData.annotations || [] };
+                updateActiveProject(p => ({ ...p, ...newState, history: [newState], historyIndex: 0, isDirty: true }));
+                setSelectedNodeIds(new Set()); setSelectedEdgeId(null); setSelectedAnnotationIds(new Set());
+            }
+        } catch (error) {
+            alert(`Erro ao importar: ${error instanceof Error ? error.message : 'Erro'}`);
+        } finally { if (input) input.value = ''; }
+    };
+    reader.onerror = () => { alert('Erro ao ler o arquivo.'); if (input) input.value = ''; };
+    reader.readAsText(file);
+  }, [activeProjectId, updateActiveProject]);
   
   const handleClear = useCallback(() => {
-    if (window.confirm('Tem certeza que deseja limpar o fluxograma? Todo o progresso salvo localmente será perdido.')) {
-        const emptyState: FlowchartData = { nodes: [], edges: [], annotations: [] };
-        setNodes(emptyState.nodes);
-        setEdges(emptyState.edges);
-        setAnnotations(emptyState.annotations || []);
-        setHistory([emptyState]);
-        setHistoryIndex(0);
-        setSelectedEdgeId(null);
-        setSelectedNodeIds(new Set());
-        setSelectedAnnotationIds(new Set());
+    if (window.confirm('Tem certeza que deseja limpar o fluxograma ATUAL?')) {
+        const emptyState: HistoryState = { nodes: [], edges: [], annotations: [] };
+        updateActiveProject(p => ({ ...p, ...emptyState, history: [emptyState], historyIndex: 0, isDirty: true }));
+        setSelectedEdgeId(null); setSelectedNodeIds(new Set()); setSelectedAnnotationIds(new Set());
     }
+  }, [updateActiveProject]);
+  
+  const handleAddProject = () => {
+    const newProject = createNewProject(`Fluxograma ${projects.length + 1}`);
+    setProjects(prev => [...prev, newProject]);
+    setOpenProjectIds(prev => [...prev, newProject.id]);
+    setActiveProjectId(newProject.id);
+  };
+
+  const handleCloseProject = useCallback((idToClose: string) => {
+    setOpenProjectIds(currentOpenIds => {
+        const newOpenIds = currentOpenIds.filter(id => id !== idToClose);
+        
+        if (activeProjectId === idToClose) {
+            const closingIndex = currentOpenIds.findIndex(id => id === idToClose);
+            const newActiveIndex = Math.max(0, closingIndex - 1);
+            setActiveProjectId(newOpenIds[newActiveIndex] || newOpenIds[0] || null);
+        }
+        
+        if (newOpenIds.length === 0 && projects.length > 0) {
+            const firstProject = projects[0];
+            setActiveProjectId(firstProject.id);
+            return [firstProject.id];
+        }
+
+        return newOpenIds;
+    });
+  }, [activeProjectId, projects]);
+
+  const handleRenameProject = (id: string, newName: string) => {
+    setProjects(prev => prev.map(p => p.id === id ? { ...p, name: newName, isDirty: true } : p));
+  };
+
+  const handleOpenProject = useCallback((idToOpen: string) => {
+    if (!openProjectIds.includes(idToOpen)) {
+        setOpenProjectIds(prev => [...prev, idToOpen]);
+    }
+    setActiveProjectId(idToOpen);
+    setIsProjectManagerOpen(false);
+  }, [openProjectIds]);
+
+  const handleDeleteProject = useCallback((idToDelete: string) => {
+    // This logic needs to be atomic to prevent inconsistent states.
+    // We calculate the next state completely before setting it.
+    
+    const nextProjects = projects.filter(p => p.id !== idToDelete);
+    const nextOpenIds = openProjectIds.filter(id => id !== idToDelete);
+    
+    // Case 1: We deleted the last project in existence.
+    if (nextProjects.length === 0) {
+      const newProject = createNewProject('Meu Primeiro Fluxograma');
+      setProjects([newProject]);
+      setOpenProjectIds([newProject.id]);
+      setActiveProjectId(newProject.id);
+      return;
+    }
+    
+    // Case 2: The deleted project was NOT the active one.
+    // The active ID is still valid and present in nextOpenIds.
+    if (activeProjectId !== idToDelete) {
+      setProjects(nextProjects);
+      setOpenProjectIds(nextOpenIds);
+      // activeProjectId does not change
+      return;
+    }
+    
+    // Case 3: The deleted project WAS the active one. Find a new active project.
+    const closingIndex = openProjectIds.indexOf(idToDelete);
+    const newActiveIndex = Math.max(0, closingIndex - 1); // Prefer tab to the left
+    let nextActiveId = nextOpenIds[newActiveIndex] ?? nextOpenIds[0] ?? null;
+    
+    // Case 3a: Deleting the active project left no tabs open.
+    if (nextActiveId === null) {
+      // Open the first project from the remaining list.
+      const firstProject = nextProjects[0];
+      setProjects(nextProjects);
+      setOpenProjectIds([firstProject.id]);
+      setActiveProjectId(firstProject.id);
+    } else {
+      // Case 3b: Other tabs are still open, just switch to the new active one.
+      setProjects(nextProjects);
+      setOpenProjectIds(nextOpenIds);
+      setActiveProjectId(nextActiveId);
+    }
+  }, [projects, openProjectIds, activeProjectId]);
+  
+  const onSelectProject = useCallback((id: string) => {
+    setActiveProjectId(id);
+    setSelectedNodeIds(new Set());
+    setSelectedAnnotationIds(new Set());
+    setSelectedEdgeId(null);
   }, []);
+
+  const handleSaveProject = useCallback(() => {
+    if (!activeProjectId) return;
+    setProjects(currentProjects => {
+        const updatedProjects = currentProjects.map(p => 
+            p.id === activeProjectId ? { ...p, isDirty: false } : p
+        );
+        saveDataToLocalStorage(updatedProjects, openProjectIds, activeProjectId);
+        return updatedProjects;
+    });
+  }, [activeProjectId, openProjectIds]);
 
   return (
     <div className="flex h-screen font-sans bg-[var(--color-bg)] text-[var(--color-text-primary)] overflow-hidden" onClick={closeContextMenu}>
@@ -718,42 +739,55 @@ const App: React.FC = () => {
             onAddAnnotation={addAnnotation}
             theme={theme}
             setTheme={setTheme}
+            onSaveProject={handleSaveProject}
+            isProjectDirty={activeProject?.isDirty ?? false}
+            onOpenProjectManager={() => setIsProjectManagerOpen(true)}
           />
           
       </div>
-      <main className="flex-1 relative bg-[var(--color-bg)]">
-        <Canvas
-          nodes={nodes}
-          edges={edges}
-          annotations={annotations}
-          setNodes={setNodes}
-          setEdges={setEdges}
-          setAnnotations={setAnnotations}
-          updateNodePosition={updateNodePosition}
-          updateNodeText={updateNodeText}
-          updateNodeDimensions={updateNodeDimensions}
-          deleteNode={deleteNode}
-          updateAnnotationPosition={updateAnnotationPosition}
-          updateAnnotationText={updateAnnotationText}
-          updateAnnotationDimensions={updateAnnotationDimensions}
-          deleteAnnotation={deleteAnnotation}
-          autoConnect={autoConnect}
-          onOpenContextMenu={openContextMenu}
-          selectedEdgeId={selectedEdgeId}
-          setSelectedEdgeId={setSelectedEdgeId}
-          deleteEdge={deleteEdge}
-          updateEdgeLabel={updateEdgeLabel}
-          fontsLoaded={fontsLoaded}
-          selectedNodeIds={selectedNodeIds}
-          setSelectedNodeIds={setSelectedNodeIds}
-          selectedAnnotationIds={selectedAnnotationIds}
-          setSelectedAnnotationIds={setSelectedAnnotationIds}
-          snapToGrid={snapToGrid}
-        />
-        <div className="absolute bottom-4 right-4 bg-[var(--color-bg-secondary)]/80 backdrop-blur-sm p-3 rounded-lg text-xs text-[var(--color-text-secondary)] shadow-lg flex items-center gap-6 border border-[var(--color-border)]">
-            <div className="flex items-center gap-2"><StartIcon className="w-4 h-4 text-green-400"/> Início/Fim</div>
-            <div className="flex items-center gap-2"><ProcessIcon className="w-4 h-4 text-blue-400"/> Processo</div>
-            <div className="flex items-center gap-2"><DecisionIcon className="w-4 h-4 text-purple-400"/> Decisão</div>
+      <main className="flex-1 flex flex-col relative bg-[var(--color-bg)]">
+         <Tabs 
+            projects={openProjects}
+            activeProjectId={activeProjectId}
+            onSelectProject={onSelectProject}
+            onAddProject={handleAddProject}
+            onCloseProject={handleCloseProject}
+            onRenameProject={handleRenameProject}
+         />
+        <div className="flex-grow relative">
+            <Canvas
+              nodes={activeProject?.nodes || []}
+              edges={activeProject?.edges || []}
+              annotations={activeProject?.annotations || []}
+              setNodes={setNodes}
+              setEdges={setEdges}
+              setAnnotations={setAnnotations}
+              updateNodePosition={updateNodePosition}
+              updateNodeText={updateNodeText}
+              updateNodeDimensions={updateNodeDimensions}
+              deleteNode={deleteNode}
+              updateAnnotationPosition={() => {}} // Placeholder
+              updateAnnotationText={() => {}} // Placeholder
+              updateAnnotationDimensions={() => {}} // Placeholder
+              deleteAnnotation={() => {}} // Placeholder
+              autoConnect={autoConnect}
+              onOpenContextMenu={openContextMenu}
+              selectedEdgeId={selectedEdgeId}
+              setSelectedEdgeId={setSelectedEdgeId}
+              deleteEdge={deleteEdge}
+              updateEdgeLabel={updateEdgeLabel}
+              fontsLoaded={fontsLoaded}
+              selectedNodeIds={selectedNodeIds}
+              setSelectedNodeIds={setSelectedNodeIds}
+              selectedAnnotationIds={selectedAnnotationIds}
+              setSelectedAnnotationIds={setSelectedAnnotationIds}
+              snapToGrid={snapToGrid}
+            />
+            <div className="absolute bottom-4 right-4 bg-[var(--color-bg-secondary)]/80 backdrop-blur-sm p-3 rounded-lg text-xs text-[var(--color-text-secondary)] shadow-lg flex items-center gap-6 border border-[var(--color-border)]">
+                <div className="flex items-center gap-2"><StartIcon className="w-4 h-4 text-green-400"/> Início/Fim</div>
+                <div className="flex items-center gap-2"><ProcessIcon className="w-4 h-4 text-blue-400"/> Processo</div>
+                <div className="flex items-center gap-2"><DecisionIcon className="w-4 h-4 text-purple-400"/> Decisão</div>
+            </div>
         </div>
       </main>
       {contextMenu && createPortal(
@@ -777,6 +811,18 @@ const App: React.FC = () => {
         onRetry={() => {
             setIsPermissionModalOpen(false);
             handlePaste();
+        }}
+      />
+      <ProjectManagerModal
+        isOpen={isProjectManagerOpen}
+        onClose={() => setIsProjectManagerOpen(false)}
+        projects={projects}
+        onOpenProject={handleOpenProject}
+        onDeleteProject={handleDeleteProject}
+        onRenameProject={handleRenameProject}
+        onNewProject={() => {
+            handleAddProject();
+            setIsProjectManagerOpen(false);
         }}
       />
     </div>

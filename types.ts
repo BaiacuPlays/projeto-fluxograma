@@ -38,3 +38,20 @@ export interface FlowchartData {
   edges: EdgeData[];
   annotations?: AnnotationData[];
 }
+
+export interface HistoryState {
+  nodes: NodeData[];
+  edges: EdgeData[];
+  annotations: AnnotationData[];
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  nodes: NodeData[];
+  edges: EdgeData[];
+  annotations: AnnotationData[];
+  history: HistoryState[];
+  historyIndex: number;
+  isDirty: boolean;
+}

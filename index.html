@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -88,6 +89,26 @@
              background: #9CA3AF;
         }
         
+        .tabs-scrollbar::-webkit-scrollbar {
+            height: 6px;
+        }
+        .tabs-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .tabs-scrollbar::-webkit-scrollbar-thumb {
+            background: #4B5563;
+            border-radius: 10px;
+        }
+        html.light .tabs-scrollbar::-webkit-scrollbar-thumb {
+            background: #D1D5DB;
+        }
+        .tabs-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #6B7280;
+        }
+        html.light .tabs-scrollbar::-webkit-scrollbar-thumb:hover {
+             background: #9CA3AF;
+        }
+
         textarea::-webkit-scrollbar { width: 5px; }
         textarea::-webkit-scrollbar-track { background: transparent; }
         textarea::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 10px; }

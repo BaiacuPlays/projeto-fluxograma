@@ -1,7 +1,7 @@
 
 import React, { useRef } from 'react';
 import { NodeData, NodeType } from '../types';
-import { StartIcon, ProcessIcon, DecisionIcon, EndIcon, AddIcon, DownloadIcon, UploadIcon, TrashIcon, AnnotationIcon, SunIcon, MoonIcon } from './Icons';
+import { StartIcon, ProcessIcon, DecisionIcon, EndIcon, AddIcon, DownloadIcon, UploadIcon, TrashIcon, AnnotationIcon, SunIcon, MoonIcon, SaveIcon, FolderIcon } from './Icons';
 
 interface SidebarProps {
   addNode: (type: NodeType) => void;
@@ -16,12 +16,16 @@ interface SidebarProps {
   onAddAnnotation: () => void;
   theme: 'light' | 'dark';
   setTheme: React.Dispatch<React.SetStateAction<'light' | 'dark'>>;
+  onSaveProject: () => void;
+  isProjectDirty: boolean;
+  onOpenProjectManager: () => void;
 }
 
-const ActionButton: React.FC<{ text: string, icon: React.ReactNode, onClick: () => void }> = ({ text, icon, onClick }) => (
+const ActionButton: React.FC<{ text: string, icon: React.ReactNode, onClick: () => void, disabled?: boolean }> = ({ text, icon, onClick, disabled = false }) => (
     <button
         onClick={onClick}
-        className="flex items-center w-full p-3 text-left bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-tertiary-hover)] rounded-lg transition-all duration-200 shadow-sm border border-transparent hover:border-[var(--color-border)] transform hover:scale-105"
+        disabled={disabled}
+        className="flex items-center w-full p-3 text-left bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-tertiary-hover)] rounded-lg transition-all duration-200 shadow-sm border border-transparent hover:border-[var(--color-border)] transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
     >
         <div className="w-6 h-6 mr-4 flex-shrink-0 flex items-center justify-center">{icon}</div>
         <span className="flex-grow font-medium text-sm">{text}</span>
@@ -55,7 +59,7 @@ const NodeButton: React.FC<{ type: NodeType, text: string, icon: React.ReactNode
 const Sidebar: React.FC<SidebarProps> = ({ 
     addNode, autoConnect, setAutoConnect, snapToGrid, setSnapToGrid, 
     onExportPNG, onExportJSON, onImportJSON, onClear, onAddAnnotation,
-    theme, setTheme
+    theme, setTheme, onSaveProject, isProjectDirty, onOpenProjectManager
 }) => {
   const importInputRef = useRef<HTMLInputElement>(null);
   
@@ -96,10 +100,21 @@ const Sidebar: React.FC<SidebarProps> = ({
        <div className="mt-6 pt-4 border-t border-[var(--color-border)]">
           <h3 className="text-base font-semibold mb-3 text-[var(--color-text-secondary)]">Ações</h3>
           <div className="space-y-3">
+              <ActionButton 
+                  text="Meus Projetos"
+                  icon={<FolderIcon className="text-amber-400 w-5 h-5" />}
+                  onClick={onOpenProjectManager}
+              />
                <ActionButton 
                   text="Adicionar Anotação"
                   icon={<AnnotationIcon className="text-amber-400 w-5 h-5" />}
                   onClick={onAddAnnotation}
+              />
+              <ActionButton 
+                  text="Salvar Projeto"
+                  icon={<SaveIcon className="text-cyan-400 w-5 h-5" />}
+                  onClick={onSaveProject}
+                  disabled={!isProjectDirty}
               />
               <ActionButton 
                   text="Exportar para PNG"
@@ -130,7 +145,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <h3 className="text-base font-semibold mb-3 text-red-400">Zona de Perigo</h3>
           <div className="space-y-3">
                <DangerActionButton 
-                  text="Limpar Tudo"
+                  text="Limpar Fluxograma"
                   icon={<TrashIcon className="w-5 h-5" />}
                   onClick={onClear}
               />

@@ -1,8 +1,5 @@
 {
   "name": "Criador de Fluxogramas",
   "description": "Uma aplicação web para criar, visualizar e editar fluxogramas usando uma interface simples de arrastar e soltar.",
-  "requestFramePermissions": [
-    "clipboardRead",
-    "clipboardWrite"
-  ]
+  "requestFramePermissions": []
 }

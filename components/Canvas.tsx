@@ -1,4 +1,5 @@
-import React, { useState, useRef, useCallback, MouseEvent, useEffect } from 'react';
+
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { NodeData, EdgeData, Position, AnnotationData } from '../types';
 import Node from './Node';
 import Edge, { getClosestConnection, getCurvePath, getConnectionPoints } from './Edge';
@@ -84,7 +85,7 @@ const Canvas: React.FC<CanvasProps> = ({
     const canvasRef = useRef<SVGSVGElement>(null);
     const gRef = useRef<SVGGElement>(null);
 
-    const getSVGPoint = useCallback((e: MouseEvent | React.MouseEvent) => {
+    const getSVGPoint = useCallback((e: React.MouseEvent | React.WheelEvent) => {
         if (!canvasRef.current || !gRef.current) return { x: 0, y: 0 };
         const point = canvasRef.current.createSVGPoint();
         point.x = e.clientX;
@@ -99,8 +100,9 @@ const Canvas: React.FC<CanvasProps> = ({
     const handleItemMouseDown = (e: React.MouseEvent, id: string, type: 'node' | 'annotation') => {
         e.preventDefault();
         
-        let newSelectedNodes = new Set(selectedNodeIds);
-        let newSelectedAnnotations = new Set(selectedAnnotationIds);
+        // Fix: Explicitly typed Set to resolve type inference issues.
+        let newSelectedNodes: Set<string> = new Set(selectedNodeIds);
+        let newSelectedAnnotations: Set<string> = new Set(selectedAnnotationIds);
 
         const itemIsSelected = type === 'node' ? newSelectedNodes.has(id) : newSelectedAnnotations.has(id);
 
@@ -112,8 +114,8 @@ const Canvas: React.FC<CanvasProps> = ({
             }
         } else {
             if (!itemIsSelected) {
-                newSelectedNodes = type === 'node' ? new Set([id]) : new Set();
-                newSelectedAnnotations = type === 'annotation' ? new Set([id]) : new Set();
+                newSelectedNodes = type === 'node' ? new Set([id]) : new Set<string>();
+                newSelectedAnnotations = type === 'annotation' ? new Set([id]) : new Set<string>();
             }
         }
         
@@ -141,14 +143,22 @@ const Canvas: React.FC<CanvasProps> = ({
         });
     };
 
-    const handleMouseDown = (e: MouseEvent<SVGSVGElement>) => {
-        // FIX: Replaced unsafe type assertion with a type guard for improved type safety.
-        // Reverting to a type assertion to fix a potential type narrowing issue.
-        const target = e.target as Element;
+    const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
+        const target = e.target;
+        if (!(target instanceof Element)) return;
+
         const isNodeTarget = target.closest('.node-group');
         const isAnnotationTarget = target.closest('.annotation-group');
         const isEdgeTarget = target.closest('.group-edge');
 
+        // Pan action (middle mouse, alt-click, or right-click on background)
+        if (e.button === 1 || e.altKey || (e.button === 2 && !isNodeTarget)) {
+            setIsPanning(true);
+            setLastMousePosition({ x: e.clientX, y: e.clientY });
+            return;
+        }
+        
+        // If click is on background (not on a node, annotation, or edge)
         if (!isNodeTarget && !isAnnotationTarget && !isEdgeTarget) {
             if (!e.shiftKey) {
                 setSelectedNodeIds(new Set());
@@ -158,14 +168,9 @@ const Canvas: React.FC<CanvasProps> = ({
             const startPos = getSVGPoint(e);
             setSelectionBox({ start: startPos, end: startPos });
         }
-        
-        if (e.button === 1 || e.altKey || (e.button === 2 && !isNodeTarget)) {
-            setIsPanning(true);
-            setLastMousePosition({ x: e.clientX, y: e.clientY });
-        }
     };
 
-    const handleMouseMove = (e: MouseEvent<SVGSVGElement>) => {
+    const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
         if (isPanning && lastMousePosition) {
             const dx = e.clientX - lastMousePosition.x;
             const dy = e.clientY - lastMousePosition.y;
@@ -445,8 +450,7 @@ const Canvas: React.FC<CanvasProps> = ({
     const handleWheel = (e: React.WheelEvent<SVGSVGElement>) => {
         e.preventDefault();
         const zoomFactor = 1.1;
-        // FIX: Add explicit type cast to resolve potential incompatibility issues between WheelEvent and MouseEvent types in some environments.
-        const { x, y } = getSVGPoint(e as React.MouseEvent);
+        const { x, y } = getSVGPoint(e);
         
         setView(prev => {
             const newZoom = e.deltaY < 0 ? prev.zoom * zoomFactor : prev.zoom / zoomFactor;
@@ -661,7 +665,7 @@ const Canvas: React.FC<CanvasProps> = ({
                             setSelectedEdgeId(null);
                             setSelectedAnnotationIds(new Set());
                         }}
-                        onMouseDown={(e) => handleItemMouseDown(e, node.id, 'node')}
+                        onMouseDown={(e, id) => handleItemMouseDown(e, id, 'node')}
                         isSelected={selectedNodeIds.has(node.id)}
                         fontsLoaded={fontsLoaded}
                     />
