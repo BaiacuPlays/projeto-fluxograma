@@ -1,9 +1,10 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { NodeData, EdgeData, NodeType, Position, FlowchartData } from './types';
 import Canvas from './components/Canvas';
 import Sidebar from './components/Sidebar';
 import ContextMenu from './components/ContextMenu';
+import PermissionModal from './components/PermissionModal';
 import { StartIcon, ProcessIcon, DecisionIcon } from './components/Icons';
 
 const defaultDimensions = {
@@ -11,6 +12,13 @@ const defaultDimensions = {
     end: { width: 150, height: 60 },
     process: { width: 150, height: 70 },
     decision: { width: 160, height: 100 },
+};
+
+const nodeTypeTextMap: Record<NodeType, string> = {
+    start: 'Início',
+    process: 'Processo',
+    decision: 'Decisão',
+    end: 'Fim',
 };
 
 const sanitizeFlowchartData = (data: any): FlowchartData => {
@@ -91,29 +99,103 @@ const loadInitialData = (): FlowchartData => {
 
 
 const App: React.FC = () => {
-  const [initialData] = useState(loadInitialData);
-  const [nodes, setNodes] = useState<NodeData[]>(initialData.nodes);
-  const [edges, setEdges] = useState<EdgeData[]>(initialData.edges);
+  const [initialFlowchartData] = useState(loadInitialData);
+  const [nodes, setNodes] = useState<NodeData[]>(initialFlowchartData.nodes);
+  const [edges, setEdges] = useState<EdgeData[]>(initialFlowchartData.edges);
+  
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
   const [autoConnect, setAutoConnect] = useState<boolean>(true);
+  const [snapToGrid, setSnapToGrid] = useState<boolean>(true);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: NodeData } | null>(null);
   const [fontsLoaded, setFontsLoaded] = useState(false);
+  const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
+
+  const [history, setHistory] = useState<FlowchartData[]>([initialFlowchartData]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const isRestoring = useRef(false);
+  const debounceTimeout = useRef<number | null>(null);
 
   useEffect(() => {
     document.fonts.ready.then(() => {
       setFontsLoaded(true);
     });
   }, []);
-
+  
   useEffect(() => {
-    try {
-        const dataToSave = { nodes, edges };
-        localStorage.setItem('flowchart-autosave', JSON.stringify(dataToSave));
-    } catch (error) {
-        console.error("Falha ao salvar o fluxograma no armazenamento local.", error);
+      if (isRestoring.current) {
+        isRestoring.current = false;
+        return;
+      }
+
+      if (debounceTimeout.current) {
+        clearTimeout(debounceTimeout.current);
+      }
+
+      debounceTimeout.current = window.setTimeout(() => {
+        const currentState = { nodes, edges };
+        const lastState = history[historyIndex];
+        
+        if (JSON.stringify(currentState) === JSON.stringify(lastState)) {
+            return;
+        }
+        
+        const newHistory = history.slice(0, historyIndex + 1);
+        
+        setHistory([...newHistory, currentState]);
+        setHistoryIndex(newHistory.length);
+
+        try {
+            localStorage.setItem('flowchart-autosave', JSON.stringify(currentState));
+        } catch (error) {
+            console.error("Falha ao salvar o fluxograma no armazenamento local.", error);
+        }
+      }, 500);
+
+      return () => {
+        if (debounceTimeout.current) {
+          clearTimeout(debounceTimeout.current);
+        }
+      };
+    }, [nodes, edges, history, historyIndex]);
+
+  const handleUndo = useCallback(() => {
+    if (historyIndex > 0) {
+        isRestoring.current = true;
+        const newIndex = historyIndex - 1;
+        setHistoryIndex(newIndex);
+        const prevState = history[newIndex];
+        setNodes(prevState.nodes);
+        setEdges(prevState.edges);
     }
-  }, [nodes, edges]);
+  }, [history, historyIndex]);
+
+  const handleRedo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+        isRestoring.current = true;
+        const newIndex = historyIndex + 1;
+        setHistoryIndex(newIndex);
+        const nextState = history[newIndex];
+        setNodes(nextState.nodes);
+        setEdges(nextState.edges);
+    }
+  }, [history, historyIndex]);
+
+  const addNode = useCallback((type: NodeType) => {
+    const GRID_SIZE = 20;
+    const snap = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
+
+    const initialPos = { x: Math.random() * 200 + 50, y: Math.random() * 100 + 50 };
+    const finalPos = snapToGrid ? { x: snap(initialPos.x), y: snap(initialPos.y) } : initialPos;
+
+    const newNode: NodeData = {
+      id: `${type}-${Date.now()}${Math.round(Math.random() * 100)}`,
+      type,
+      text: nodeTypeTextMap[type],
+      position: finalPos,
+    };
+    setNodes((nds) => [...nds, newNode]);
+  }, [snapToGrid]);
 
   const updateNodePosition = useCallback((id: string, position: { x: number; y: number }) => {
     setNodes((prevNodes) =>
@@ -179,15 +261,165 @@ const App: React.FC = () => {
     closeContextMenu();
   }, []);
 
+  const handleAddChild = useCallback((parentNodeId: string) => {
+    const parentNode = nodes.find(n => n.id === parentNodeId);
+    if (!parentNode) return;
+
+    const GRID_SIZE = 20;
+    const snap = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
+
+    const parentHeight = parentNode.height ?? defaultDimensions[parentNode.type].height;
+
+    const initialPos = { 
+      x: parentNode.position.x, 
+      y: parentNode.position.y + parentHeight + 80
+    };
+    const finalPos = snapToGrid ? { x: snap(initialPos.x), y: snap(initialPos.y) } : initialPos;
+
+    const newNode: NodeData = {
+      id: `${parentNode.type}-${Date.now()}${Math.round(Math.random() * 100)}`,
+      type: parentNode.type,
+      text: nodeTypeTextMap[parentNode.type],
+      position: finalPos,
+      color: parentNode.color,
+    };
+
+    const newEdge: EdgeData = {
+      id: `e-${parentNode.id}-${newNode.id}-${Date.now()}`,
+      source: parentNode.id,
+      target: newNode.id,
+    };
+    
+    setNodes(nds => [...nds, newNode]);
+    setEdges(eds => [...eds, newEdge]);
+    closeContextMenu();
+  }, [nodes, snapToGrid]);
+
+  const handleCopy = useCallback(() => {
+    if (selectedNodeIds.size === 0) return;
+
+    const selectedNodes = nodes.filter(n => selectedNodeIds.has(n.id));
+    const selectedEdges = edges.filter(e => selectedNodeIds.has(e.source) && selectedNodeIds.has(e.target));
+    
+    const dataToCopy = {
+        type: 'flowchart-copy-data',
+        data: {
+            nodes: selectedNodes,
+            edges: selectedEdges,
+        },
+    };
+
+    navigator.clipboard.writeText(JSON.stringify(dataToCopy))
+        .catch(err => {
+            console.error('Falha ao copiar para a área de transferência:', err);
+            alert('Não foi possível copiar os blocos. Verifique as permissões do navegador.');
+        });
+  }, [nodes, edges, selectedNodeIds]);
+
+  const handlePaste = useCallback(async () => {
+    try {
+        const permission = await navigator.permissions.query({ name: 'clipboard-read' as any });
+        if (permission.state === 'denied') {
+          setIsPermissionModalOpen(true);
+          return;
+        }
+
+        const clipboardText = await navigator.clipboard.readText();
+        const clipboardData = JSON.parse(clipboardText);
+
+        if (clipboardData?.type !== 'flowchart-copy-data' || !clipboardData.data) {
+            return;
+        }
+
+        const pastedFlowchart: FlowchartData = clipboardData.data;
+        if (!Array.isArray(pastedFlowchart.nodes) || pastedFlowchart.nodes.length === 0) {
+            return;
+        }
+        
+        const idMap = new Map<string, string>();
+        const newNodes: NodeData[] = [];
+        const newEdges: EdgeData[] = [];
+
+        pastedFlowchart.nodes.forEach(node => {
+            const newId = `${node.type}-${Date.now()}${Math.round(Math.random() * 1000)}`;
+            idMap.set(node.id, newId);
+            newNodes.push({
+                ...node,
+                id: newId,
+                position: {
+                    x: node.position.x + 30,
+                    y: node.position.y + 30,
+                },
+            });
+        });
+        
+        if (Array.isArray(pastedFlowchart.edges)) {
+            pastedFlowchart.edges.forEach(edge => {
+                const newSourceId = idMap.get(edge.source);
+                const newTargetId = idMap.get(edge.target);
+                
+                if (newSourceId && newTargetId) {
+                    newEdges.push({
+                        ...edge,
+                        id: `e-${newSourceId}-${newTargetId}-${Date.now()}${Math.round(Math.random() * 1000)}`,
+                        source: newSourceId,
+                        target: newTargetId,
+                    });
+                }
+            });
+        }
+
+        setNodes(nds => [...nds, ...newNodes]);
+        setEdges(eds => [...eds, ...newEdges]);
+        
+        setSelectedNodeIds(new Set(newNodes.map(n => n.id)));
+        setSelectedEdgeId(null);
+        
+    } catch (err) {
+        console.warn('Falha ao colar da área de transferência:', err);
+    }
+  }, [setNodes, setEdges, setSelectedNodeIds, setSelectedEdgeId]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-        if ((e.key === 'Backspace' || e.key === 'Delete')) {
-            const activeEl = document.activeElement;
-            if (activeEl && ['INPUT', 'TEXTAREA'].includes(activeEl.tagName)) {
-                return;
-            }
-            e.preventDefault();
+        const activeEl = document.activeElement;
+        const isTyping = activeEl && ['INPUT', 'TEXTAREA'].includes(activeEl.tagName);
 
+        if (isTyping) return;
+
+        const isMac = navigator.platform.toUpperCase().includes('MAC');
+        const isCopy = (isMac ? e.metaKey : e.ctrlKey) && e.key === 'c';
+        const isPaste = (isMac ? e.metaKey : e.ctrlKey) && e.key === 'v';
+        const isDelete = e.key === 'Backspace' || e.key === 'Delete';
+        const isUndo = (isMac ? e.metaKey : e.ctrlKey) && e.key === 'z';
+        const isRedo = (isMac ? e.metaKey : e.ctrlKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'));
+
+        if (isUndo) {
+            e.preventDefault();
+            handleUndo();
+            return;
+        }
+
+        if (isRedo) {
+            e.preventDefault();
+            handleRedo();
+            return;
+        }
+
+        if (isCopy) {
+            e.preventDefault();
+            handleCopy();
+            return;
+        }
+
+        if (isPaste) {
+            e.preventDefault();
+            handlePaste();
+            return;
+        }
+
+        if (isDelete) {
+            e.preventDefault();
             if (selectedEdgeId) {
                 deleteEdge(selectedEdgeId);
             }
@@ -201,7 +433,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEdgeId, deleteEdge, selectedNodeIds, setNodes, setEdges]);
+  }, [selectedEdgeId, deleteEdge, selectedNodeIds, handleCopy, handlePaste, setNodes, setEdges, handleUndo, handleRedo]);
 
 
   const openContextMenu = (x: number, y: number, node: NodeData) => {
@@ -328,6 +560,8 @@ const App: React.FC = () => {
               if (window.confirm('Isso substituirá o fluxograma atual. Deseja continuar?')) {
                   setNodes(sanitizedData.nodes);
                   setEdges(sanitizedData.edges);
+                  setHistory([sanitizedData]);
+                  setHistoryIndex(0);
                   setSelectedNodeIds(new Set());
                   setSelectedEdgeId(null);
               }
@@ -348,8 +582,11 @@ const App: React.FC = () => {
   
   const handleClear = useCallback(() => {
     if (window.confirm('Tem certeza que deseja limpar o fluxograma? Todo o progresso salvo localmente será perdido.')) {
-        setNodes([]);
-        setEdges([]);
+        const emptyState: FlowchartData = { nodes: [], edges: [] };
+        setNodes(emptyState.nodes);
+        setEdges(emptyState.edges);
+        setHistory([emptyState]);
+        setHistoryIndex(0);
         setSelectedEdgeId(null);
         setSelectedNodeIds(new Set());
     }
@@ -364,9 +601,11 @@ const App: React.FC = () => {
           </header>
           
           <Sidebar 
-            setNodes={setNodes} 
+            addNode={addNode} 
             autoConnect={autoConnect}
             setAutoConnect={setAutoConnect}
+            snapToGrid={snapToGrid}
+            setSnapToGrid={setSnapToGrid}
             onExportPNG={handleExportPNG}
             onExportJSON={handleExportJSON}
             onImportJSON={handleImportJSON}
@@ -393,6 +632,7 @@ const App: React.FC = () => {
           fontsLoaded={fontsLoaded}
           selectedNodeIds={selectedNodeIds}
           setSelectedNodeIds={setSelectedNodeIds}
+          snapToGrid={snapToGrid}
         />
         <div className="absolute bottom-4 right-4 bg-[#1F2937]/80 backdrop-blur-sm p-3 rounded-lg text-xs text-gray-300 shadow-lg flex items-center gap-6 border border-[#374151]">
             <div className="flex items-center gap-2"><StartIcon className="w-4 h-4 text-green-400"/> Início/Fim</div>
@@ -411,9 +651,18 @@ const App: React.FC = () => {
             onChangeType={updateNodeType}
             onChangeColor={updateNodeColor}
             onResetSize={resetNodeSize}
+            onAddChild={handleAddChild}
         />,
         document.body
       )}
+      <PermissionModal
+        isOpen={isPermissionModalOpen}
+        onClose={() => setIsPermissionModalOpen(false)}
+        onRetry={() => {
+            setIsPermissionModalOpen(false);
+            handlePaste();
+        }}
+      />
     </div>
   );
 };

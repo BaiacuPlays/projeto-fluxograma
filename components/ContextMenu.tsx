@@ -1,6 +1,6 @@
 import React, { useState, useRef, useLayoutEffect } from 'react';
 import { NodeData, NodeType } from '../types';
-import { TrashIcon, DisconnectIcon, ShapeIcon, ColorPaletteIcon, ChevronRightIcon, StartIcon, ProcessIcon, DecisionIcon, EndIcon, ResetSizeIcon } from './Icons';
+import { TrashIcon, DisconnectIcon, ShapeIcon, ColorPaletteIcon, ChevronRightIcon, StartIcon, ProcessIcon, DecisionIcon, EndIcon, ResetSizeIcon, AddChildIcon } from './Icons';
 
 interface ContextMenuProps {
     x: number;
@@ -12,6 +12,7 @@ interface ContextMenuProps {
     onChangeType: (id: string, type: NodeType) => void;
     onChangeColor: (id: string, color?: string) => void;
     onResetSize: (id: string) => void;
+    onAddChild: (id: string) => void;
 }
 
 const nodeTypes: { type: NodeType; label: string; icon: React.ReactNode }[] = [
@@ -23,7 +24,7 @@ const nodeTypes: { type: NodeType; label: string; icon: React.ReactNode }[] = [
 
 const colors = ['#F87171', '#FBBF24', '#34D399', '#60A5FA', '#A78BFA', '#F472B6'];
 
-const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, node, onClose, onDelete, onRemoveConnections, onChangeType, onChangeColor, onResetSize }) => {
+const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, node, onClose, onDelete, onRemoveConnections, onChangeType, onChangeColor, onResetSize, onAddChild }) => {
     const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     
@@ -144,6 +145,13 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, node, onClose, onDelete
                     <button onClick={handleAction(() => onResetSize(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[#374151] transition-colors duration-150">
                         <ResetSizeIcon className="w-5 h-5 mr-3" />
                         <span>Redefinir Tamanho</span>
+                    </button>
+                </li>
+
+                <li>
+                    <button onClick={handleAction(() => onAddChild(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[#374151] transition-colors duration-150">
+                        <AddChildIcon className="w-5 h-5 mr-3" />
+                        <span>Adicionar Bloco Filho</span>
                     </button>
                 </li>
                 

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, MouseEvent } from 'react';
+import React, { useState, useRef, useCallback, MouseEvent, useEffect } from 'react';
 import { NodeData, EdgeData, Position } from '../types';
 import Node from './Node';
 import Edge, { getClosestConnection, getCurvePath, getConnectionPoints } from './Edge';
@@ -15,6 +15,13 @@ type DisplacedNodeInfo = {
 }
 
 const CROWDED_THRESHOLD = 250; 
+
+const defaultDimensions = {
+    start: { width: 150, height: 60 },
+    end: { width: 150, height: 60 },
+    process: { width: 150, height: 70 },
+    decision: { width: 160, height: 100 },
+};
 
 interface CanvasProps {
   nodes: NodeData[];
@@ -34,13 +41,14 @@ interface CanvasProps {
   fontsLoaded: boolean;
   selectedNodeIds: Set<string>;
   setSelectedNodeIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  snapToGrid: boolean;
 }
 
 const Canvas: React.FC<CanvasProps> = ({ 
     nodes, edges, setNodes, setEdges, updateNodePosition, updateNodeText, 
     updateNodeDimensions, deleteNode, autoConnect, onOpenContextMenu,
     selectedEdgeId, setSelectedEdgeId, deleteEdge, updateEdgeLabel,
-    fontsLoaded, selectedNodeIds, setSelectedNodeIds
+    fontsLoaded, selectedNodeIds, setSelectedNodeIds, snapToGrid
 }) => {
     const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
     const [isPanning, setIsPanning] = useState(false);
@@ -64,7 +72,7 @@ const Canvas: React.FC<CanvasProps> = ({
     const canvasRef = useRef<SVGSVGElement>(null);
     const gRef = useRef<SVGGElement>(null);
 
-    const getSVGPoint = useCallback((e: MouseEvent) => {
+    const getSVGPoint = useCallback((e: MouseEvent | React.MouseEvent) => {
         if (!canvasRef.current || !gRef.current) return { x: 0, y: 0 };
         const point = canvasRef.current.createSVGPoint();
         point.x = e.clientX;
@@ -79,7 +87,6 @@ const Canvas: React.FC<CanvasProps> = ({
     const handleNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
         e.preventDefault();
         
-        // FIX: Explicitly set the type for the new Set to avoid it being inferred as Set<unknown>.
         const currentSelection = new Set<string>(selectedNodeIds);
         let newSelection: Set<string>;
 
@@ -109,7 +116,7 @@ const Canvas: React.FC<CanvasProps> = ({
         });
         
         setDragInfo({
-            startMousePos: getSVGPoint(e as unknown as MouseEvent),
+            startMousePos: getSVGPoint(e),
             nodeStartPositions,
             primaryNodeId: nodeId,
         });
@@ -149,7 +156,7 @@ const Canvas: React.FC<CanvasProps> = ({
         if (connecting) {
             setPreviewLine({ start: connecting.sourcePos, end: currentMousePos });
         } else if (reconnecting) {
-            const edge = edges.find(e => e.id === reconnecting.edgeId);
+            const edge = edges.find(ed => ed.id === reconnecting.edgeId);
             if (edge) {
                 const isSourceHandle = reconnecting.handle === 'source';
                 const fixedNodeId = isSourceHandle ? edge.target : edge.source;
@@ -164,24 +171,42 @@ const Canvas: React.FC<CanvasProps> = ({
         } else if (dragInfo) {
             const dx = currentMousePos.x - dragInfo.startMousePos.x;
             const dy = currentMousePos.y - dragInfo.startMousePos.y;
-            
             const primaryNodeId = dragInfo.primaryNodeId;
-            const isMultiDrag = dragInfo.nodeStartPositions.size > 1;
 
-            if (isMultiDrag) {
+            if (dragInfo.nodeStartPositions.size > 1) {
+                const GRID_SIZE = 20;
+                const snap = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
+                const primaryNodeStartPos = dragInfo.nodeStartPositions.get(primaryNodeId);
+                if (!primaryNodeStartPos) return;
+
+                let finalDx = dx;
+                let finalDy = dy;
+
+                if (snapToGrid) {
+                    const newPrimaryPosUnsnapped = { x: primaryNodeStartPos.x + dx, y: primaryNodeStartPos.y + dy };
+                    const newPrimaryPosSnapped = { x: snap(newPrimaryPosUnsnapped.x), y: snap(newPrimaryPosUnsnapped.y) };
+                    finalDx = newPrimaryPosSnapped.x - primaryNodeStartPos.x;
+                    finalDy = newPrimaryPosSnapped.y - primaryNodeStartPos.y;
+                }
+                
                  setNodes(currentNodes => currentNodes.map(node => {
                     const startPos = dragInfo.nodeStartPositions.get(node.id);
                     if (startPos) {
-                        return { ...node, position: { x: startPos.x + dx, y: startPos.y + dy } };
+                        return { ...node, position: { x: startPos.x + finalDx, y: startPos.y + finalDy } };
                     }
                     return node;
                  }));
                  if (snapTarget) setSnapTarget(null);
                  if (displacedNodeInfo) setDisplacedNodeInfo(null);
-            } else {
-                 const startPos = dragInfo.nodeStartPositions.get(primaryNodeId);
+            } else { // Single node drag
+                 const GRID_SIZE = 20;
+                 const snap = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
+                 const startPos = dragInfo.nodeStartPositions.get(dragInfo.primaryNodeId);
                  if (startPos) {
-                    const newPosition = { x: startPos.x + dx, y: startPos.y + dy };
+                    let newPosition = { x: startPos.x + dx, y: startPos.y + dy };
+                    if (snapToGrid) {
+                        newPosition = { x: snap(newPosition.x), y: snap(newPosition.y) };
+                    }
                     handleSingleNodeDrag(primaryNodeId, newPosition);
                  }
             }
@@ -190,7 +215,6 @@ const Canvas: React.FC<CanvasProps> = ({
         }
     };
     
-    // FIX: Moved `handleSingleNodeDragEnd` before `endDrag` to fix a declaration error.
     const handleSingleNodeDragEnd = useCallback((nodeId: string) => {
         setDisplacedNodeInfo(null);
         if (snapTarget) {
@@ -226,61 +250,6 @@ const Canvas: React.FC<CanvasProps> = ({
         setDragInfo(null);
     }, [dragInfo, handleSingleNodeDragEnd, snapTarget]);
 
-    const handleMouseUp = (e: MouseEvent<SVGSVGElement>) => {
-        if (isPanning) {
-            setIsPanning(false);
-            setLastMousePosition(null);
-        }
-        
-        endDrag();
-        
-        if (selectionBox) {
-            const { start, end } = selectionBox;
-            const x1 = Math.min(start.x, end.x);
-            const y1 = Math.min(start.y, end.y);
-            const x2 = Math.max(start.x, end.x);
-            const y2 = Math.max(start.y, end.y);
-
-            if (Math.abs(start.x - end.x) > 5 || Math.abs(start.y - end.y) > 5) {
-                // FIX: Explicitly set the type for the new Set to avoid it being inferred as Set<unknown>, especially when creating an empty set in the ternary operator.
-                const newlySelected = new Set<string>(e.shiftKey ? selectedNodeIds : undefined);
-                nodes.forEach(node => {
-                    const nodeWidth = node.width || 150;
-                    const nodeHeight = node.height || 70;
-                    if (node.position.x < x2 && node.position.x + nodeWidth > x1 &&
-                        node.position.y < y2 && node.position.y + nodeHeight > y1) {
-                        newlySelected.add(node.id);
-                    }
-                });
-                setSelectedNodeIds(newlySelected);
-            }
-            setSelectionBox(null);
-        }
-        if (connecting || reconnecting) {
-            setConnecting(null);
-            setReconnecting(null);
-            setPreviewLine(null);
-        }
-    };
-
-    const handleWheel = (e: React.WheelEvent<SVGSVGElement>) => {
-        e.preventDefault();
-        const zoomFactor = 1.1;
-        const { x, y } = getSVGPoint(e as unknown as MouseEvent);
-        
-        setView(prev => {
-            const newZoom = e.deltaY < 0 ? prev.zoom * zoomFactor : prev.zoom / zoomFactor;
-            const clampedZoom = Math.max(0.2, Math.min(newZoom, 3));
-            const newX = x - (x - prev.x) * (clampedZoom / prev.zoom);
-            const newY = y - (y - prev.y) * (clampedZoom / prev.zoom);
-            return { zoom: clampedZoom, x: newX, y: newY };
-        });
-    };
-
-    const startConnecting = useCallback((sourceId: string, sourcePos: Position, label?: string) => {
-        setConnecting({ sourceId, sourcePos, label });
-    }, []);
-
     const finishConnecting = useCallback((targetId: string) => {
         if (connecting && connecting.sourceId !== targetId) {
             const sourceNode = nodes.find(n => n.id === connecting.sourceId);
@@ -302,11 +271,6 @@ const Canvas: React.FC<CanvasProps> = ({
         setConnecting(null);
         setPreviewLine(null);
     }, [connecting, setEdges, nodes]);
-
-    const startReconnecting = useCallback((edgeId: string, handle: 'source' | 'target') => {
-        setReconnecting({ edgeId, handle });
-        setSelectedEdgeId(edgeId);
-    }, []);
 
     const finishReconnecting = useCallback((targetNodeId: string) => {
         if (!reconnecting) return;
@@ -346,15 +310,118 @@ const Canvas: React.FC<CanvasProps> = ({
         setPreviewLine(null);
     }, [reconnecting, setEdges, nodes]);
     
-    const handleNodeMouseUp = useCallback((nodeId: string) => {
-        if (connecting) {
-            finishConnecting(nodeId);
-        } else if (reconnecting) {
-            finishReconnecting(nodeId);
-        } else {
-            endDrag();
+    const handleEndInteraction = useCallback((targetNodeId: string | null) => {
+        if (isPanning) {
+            setIsPanning(false);
+            setLastMousePosition(null);
         }
-    }, [connecting, reconnecting, finishConnecting, finishReconnecting, endDrag]);
+        
+        endDrag();
+        
+        if (selectionBox) {
+            const { start, end } = selectionBox;
+            const x1 = Math.min(start.x, end.x);
+            const y1 = Math.min(start.y, end.y);
+            const x2 = Math.max(start.x, end.x);
+            const y2 = Math.max(start.y, end.y);
+
+            if (Math.abs(start.x - end.x) > 5 || Math.abs(start.y - end.y) > 5) {
+                const newlySelected = new Set<string>(selectedNodeIds);
+                nodes.forEach(node => {
+                    const nodeWidth = node.width || defaultDimensions[node.type].width;
+                    const nodeHeight = node.height || defaultDimensions[node.type].height;
+                    if (node.position.x < x2 && node.position.x + nodeWidth > x1 &&
+                        node.position.y < y2 && node.position.y + nodeHeight > y1) {
+                        newlySelected.add(node.id);
+                    }
+                });
+                setSelectedNodeIds(newlySelected);
+            }
+            setSelectionBox(null);
+        }
+        
+        if (targetNodeId) {
+            if (connecting) finishConnecting(targetNodeId);
+            else if (reconnecting) finishReconnecting(targetNodeId);
+        } else {
+            setConnecting(null);
+            setReconnecting(null);
+            setPreviewLine(null);
+        }
+    }, [isPanning, endDrag, selectionBox, connecting, reconnecting, finishConnecting, finishReconnecting, nodes, selectedNodeIds, setSelectedNodeIds]);
+
+
+    const getSVGPointFromEvent = useCallback((e: globalThis.MouseEvent): Position => {
+        if (!canvasRef.current || !gRef.current) return { x: 0, y: 0 };
+        const point = canvasRef.current.createSVGPoint();
+        point.x = e.clientX;
+        point.y = e.clientY;
+        const screenCTM = gRef.current.getScreenCTM();
+        if (screenCTM) {
+            return point.matrixTransform(screenCTM.inverse());
+        }
+        return { x: 0, y: 0 };
+    }, []);
+
+    useEffect(() => {
+        const isInteracting = !!connecting || !!reconnecting || !!dragInfo || !!selectionBox || isPanning;
+
+        const handleGlobalMouseUp = (e: globalThis.MouseEvent) => {
+            const point = getSVGPointFromEvent(e);
+            let targetNodeId: string | null = null;
+            
+            // Iterate backwards to find the top-most node
+            for (let i = nodes.length - 1; i >= 0; i--) {
+                const node = nodes[i];
+                const nodeWidth = node.width ?? defaultDimensions[node.type].width;
+                const nodeHeight = node.height ?? defaultDimensions[node.type].height;
+                
+                if (
+                    point.x >= node.position.x && point.x <= node.position.x + nodeWidth &&
+                    point.y >= node.position.y && point.y <= node.position.y + nodeHeight
+                ) {
+                    targetNodeId = node.id;
+                    break;
+                }
+            }
+            
+            handleEndInteraction(targetNodeId);
+        };
+
+        if (isInteracting) {
+            window.addEventListener('mouseup', handleGlobalMouseUp);
+        }
+
+        return () => {
+            window.removeEventListener('mouseup', handleGlobalMouseUp);
+        };
+    }, [connecting, reconnecting, dragInfo, selectionBox, isPanning, nodes, getSVGPointFromEvent, handleEndInteraction]);
+
+
+    const handleWheel = (e: React.WheelEvent<SVGSVGElement>) => {
+        e.preventDefault();
+        const zoomFactor = 1.1;
+        const { x, y } = getSVGPoint(e as unknown as MouseEvent);
+        
+        setView(prev => {
+            const newZoom = e.deltaY < 0 ? prev.zoom * zoomFactor : prev.zoom / zoomFactor;
+            const clampedZoom = Math.max(0.2, Math.min(newZoom, 3));
+            const newX = x - (x - prev.x) * (clampedZoom / prev.zoom);
+            const newY = y - (y - prev.y) * (clampedZoom / prev.zoom);
+            return { zoom: clampedZoom, x: newX, y: newY };
+        });
+    };
+
+    const startConnecting = useCallback((sourceId: string, sourcePos: Position, label?: string) => {
+        setConnecting({ sourceId, sourcePos, label });
+    }, []);
+
+    const startReconnecting = useCallback((edgeId: string, handle: 'source' | 'target') => {
+        setReconnecting({ edgeId, handle });
+        setSelectedEdgeId(edgeId);
+    }, [setSelectedEdgeId]);
+    
+    
 
     // --- Snapping and single-node drag logic ---
     const handleSingleNodeDrag = useCallback((nodeId: string, newPosition: Position) => {
@@ -463,8 +530,6 @@ const Canvas: React.FC<CanvasProps> = ({
             style={{ cursor: isPanning || dragInfo ? 'grabbing' : 'grab' }}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp} 
             onWheel={handleWheel}
             onContextMenu={(e) => {
                 const target = e.target as SVGElement;
@@ -525,7 +590,6 @@ const Canvas: React.FC<CanvasProps> = ({
                         onTextChange={updateNodeText}
                         onDelete={deleteNode}
                         onStartConnecting={startConnecting}
-                        onNodeMouseUp={handleNodeMouseUp}
                         onSizeChange={updateNodeDimensions}
                         onOpenContextMenu={onOpenContextMenu}
                         isConnecting={!!connecting || !!reconnecting}

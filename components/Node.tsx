@@ -8,7 +8,6 @@ interface NodeProps {
   onTextChange: (id: string, text: string) => void;
   onDelete: (id: string) => void;
   onStartConnecting: (id: string, sourcePos: Position, label?: string) => void;
-  onNodeMouseUp: (id: string) => void;
   onSizeChange: (id: string, dimensions: { width: number; height: number }) => void;
   onOpenContextMenu: (x: number, y: number, node: NodeData) => void;
   isConnecting: boolean;
@@ -83,7 +82,7 @@ const getConnectionPoints = (type: NodeType, width: number, height: number): Con
 
 const Node: React.FC<NodeProps> = ({ 
     data, onPositionChange, onTextChange, onDelete, onStartConnecting, 
-    onNodeMouseUp, onSizeChange, onOpenContextMenu, isConnecting, viewZoom, 
+    onSizeChange, onOpenContextMenu, isConnecting, viewZoom, 
     onInteractionStart, onNodeMouseDown, isSelected, fontsLoaded
 }) => {
     const [resizingState, setResizingState] = useState<ResizingState | null>(null);
@@ -185,11 +184,6 @@ const Node: React.FC<NodeProps> = ({
             startNodeX: data.position.x,
             startNodeY: data.position.y,
         });
-    };
-
-    const handleMouseUp = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        onNodeMouseUp(data.id);
     };
     
     const handleDoubleClick = () => {
@@ -313,11 +307,11 @@ const Node: React.FC<NodeProps> = ({
 
     return (
         <g 
+            id={data.id}
             transform={`translate(${data.position.x}, ${data.position.y})`} 
             className={`group node-group ${resizingState ? 'cursor-[var(--cursor)]' : 'cursor-default'} transition-transform duration-200 ease-out`}
             style={{'--cursor': resizingState ? resizeHandles.find(h => h.id.startsWith(resizingState.handle))?.cursor : 'default'} as React.CSSProperties}
             onMouseDown={handleMouseDown}
-            onMouseUp={handleMouseUp}
             onDoubleClick={handleDoubleClick}
             onContextMenu={handleContextMenu}
         >

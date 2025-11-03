@@ -3,21 +3,16 @@ import { NodeData, NodeType } from '../types';
 import { StartIcon, ProcessIcon, DecisionIcon, EndIcon, AddIcon, DownloadIcon, UploadIcon, TrashIcon } from './Icons';
 
 interface SidebarProps {
-  setNodes: React.Dispatch<React.SetStateAction<NodeData[]>>;
+  addNode: (type: NodeType) => void;
   autoConnect: boolean;
   setAutoConnect: React.Dispatch<React.SetStateAction<boolean>>;
+  snapToGrid: boolean;
+  setSnapToGrid: React.Dispatch<React.SetStateAction<boolean>>;
   onExportPNG: () => void;
   onExportJSON: () => void;
   onImportJSON: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onClear: () => void;
 }
-
-const nodeTypeText: Record<NodeType, string> = {
-    start: 'Início',
-    process: 'Novo Processo',
-    decision: 'Nova Decisão',
-    end: 'Fim',
-};
 
 const ActionButton: React.FC<{ text: string, icon: React.ReactNode, onClick: () => void }> = ({ text, icon, onClick }) => (
     <button
@@ -53,19 +48,9 @@ const NodeButton: React.FC<{ type: NodeType, text: string, icon: React.ReactNode
     )
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ setNodes, autoConnect, setAutoConnect, onExportPNG, onExportJSON, onImportJSON, onClear }) => {
+const Sidebar: React.FC<SidebarProps> = ({ addNode, autoConnect, setAutoConnect, snapToGrid, setSnapToGrid, onExportPNG, onExportJSON, onImportJSON, onClear }) => {
   const importInputRef = useRef<HTMLInputElement>(null);
   
-  const addNode = (type: NodeType) => {
-    const newNode: NodeData = {
-      id: `${type}-${Date.now()}`,
-      type,
-      text: nodeTypeText[type],
-      position: { x: Math.random() * 200 + 50, y: Math.random() * 100 + 50 },
-    };
-    setNodes((nds) => [...nds, newNode]);
-  };
-
   const handleImportClick = () => {
     importInputRef.current?.click();
   };
@@ -156,6 +141,24 @@ const Sidebar: React.FC<SidebarProps> = ({ setNodes, autoConnect, setAutoConnect
                   <span
                       aria-hidden="true"
                       className={`${autoConnect ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
+                  />
+              </button>
+          </div>
+           <div className="flex items-center justify-between mt-4">
+              <label htmlFor="snap-to-grid-toggle" className="font-medium text-sm text-gray-200 cursor-pointer">
+                  Alinhar à Grade
+                  <p className="text-xs text-gray-400 font-normal mt-1">Ajustar posição ao criar/mover</p>
+              </label>
+              <button
+                  role="switch"
+                  aria-checked={snapToGrid}
+                  id="snap-to-grid-toggle"
+                  onClick={() => setSnapToGrid(prev => !prev)}
+                  className={`${snapToGrid ? 'bg-cyan-500' : 'bg-gray-600'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 focus:ring-offset-[#1F2937]`}
+              >
+                  <span
+                      aria-hidden="true"
+                      className={`${snapToGrid ? 'translate-x-5' : 'translate-x-0'} pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out`}
                   />
               </button>
           </div>
