@@ -392,6 +392,27 @@ const App: React.FC = () => {
     setEdges(eds => eds.map(e => e.id === edgeId ? { ...e, label } : e));
   }, [setEdges]);
 
+  const updateAnnotationPosition = useCallback((id: string, position: Position) => {
+    setAnnotations(prev => prev.map(ann => ann.id === id ? { ...ann, position } : ann));
+  }, [setAnnotations]);
+
+  const updateAnnotationText = useCallback((id: string, text: string) => {
+    setAnnotations(prev => prev.map(ann => ann.id === id ? { ...ann, text } : ann));
+  }, [setAnnotations]);
+
+  const updateAnnotationDimensions = useCallback((id: string, dimensions: { width: number, height: number }) => {
+    setAnnotations(prev => prev.map(ann => ann.id === id ? { ...ann, ...dimensions } : ann));
+  }, [setAnnotations]);
+
+  const deleteAnnotation = useCallback((id: string) => {
+    setAnnotations(prev => prev.filter(ann => ann.id !== id));
+    setSelectedAnnotationIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+    });
+  }, [setAnnotations]);
+
   const removeNodeConnections = useCallback((nodeId: string) => {
     setEdges(eds => eds.filter(e => e.source !== nodeId && e.target !== nodeId));
     closeContextMenu();
@@ -766,10 +787,10 @@ const App: React.FC = () => {
               updateNodeText={updateNodeText}
               updateNodeDimensions={updateNodeDimensions}
               deleteNode={deleteNode}
-              updateAnnotationPosition={() => {}} // Placeholder
-              updateAnnotationText={() => {}} // Placeholder
-              updateAnnotationDimensions={() => {}} // Placeholder
-              deleteAnnotation={() => {}} // Placeholder
+              updateAnnotationPosition={updateAnnotationPosition}
+              updateAnnotationText={updateAnnotationText}
+              updateAnnotationDimensions={updateAnnotationDimensions}
+              deleteAnnotation={deleteAnnotation}
               autoConnect={autoConnect}
               onOpenContextMenu={openContextMenu}
               selectedEdgeId={selectedEdgeId}
