@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, KeyboardEvent, useLayoutEffect } from 'react';
 import { NodeData, Position, NodeType } from '../types';
 import { TrashIcon } from './Icons';
@@ -13,7 +14,7 @@ interface NodeProps {
   isConnecting: boolean;
   viewZoom: number;
   onInteractionStart: () => void;
-  onNodeMouseDown: (e: React.MouseEvent, id: string) => void;
+  onMouseDown: (e: React.MouseEvent, id: string) => void;
   isSelected: boolean;
   fontsLoaded: boolean;
 }
@@ -83,7 +84,7 @@ const getConnectionPoints = (type: NodeType, width: number, height: number): Con
 const Node: React.FC<NodeProps> = ({ 
     data, onPositionChange, onTextChange, onDelete, onStartConnecting, 
     onSizeChange, onOpenContextMenu, isConnecting, viewZoom, 
-    onInteractionStart, onNodeMouseDown, isSelected, fontsLoaded
+    onInteractionStart, onMouseDown, isSelected, fontsLoaded
 }) => {
     const [resizingState, setResizingState] = useState<ResizingState | null>(null);
     const [isEditing, setIsEditing] = useState(false);
@@ -167,7 +168,7 @@ const Node: React.FC<NodeProps> = ({
         }
         e.stopPropagation();
         onInteractionStart();
-        onNodeMouseDown(e, data.id);
+        onMouseDown(e, data.id);
     };
 
     const handleResizeMouseDown = (e: React.MouseEvent, handle: string) => {
@@ -342,7 +343,7 @@ const Node: React.FC<NodeProps> = ({
                             onChange={handleTextChange}
                             onBlur={handleTextBlur}
                             onKeyDown={handleKeyDown}
-                            className="w-full h-full bg-transparent text-white text-center font-medium text-sm p-1 m-0 border border-cyan-400 rounded-md focus:ring-0 resize-none overflow-y-auto"
+                            className="w-full h-full bg-transparent text-white text-center font-medium text-sm p-1 m-0 border border-[var(--color-accent)] rounded-md focus:ring-0 resize-none overflow-y-auto"
                             style={{ fontFamily: 'Inter, sans-serif' }}
                         />
                     </div>
@@ -390,7 +391,7 @@ const Node: React.FC<NodeProps> = ({
                                     className="fill-gray-200 text-xs font-sans font-bold pointer-events-none"
                                     style={{ fontSize: 14 / viewZoom }}
                                     paintOrder="stroke"
-                                    stroke="#1F2937"
+                                    stroke="var(--color-bg-secondary)"
                                     strokeWidth={`${6 / viewZoom}px`}
                                     strokeLinejoin="round"
                                 >
@@ -435,8 +436,8 @@ const Node: React.FC<NodeProps> = ({
                             height="10"
                             rx="2"
                             ry="2"
-                            fill="#22D3EE"
-                            stroke="#1F2937"
+                            fill="var(--color-accent)"
+                            stroke="var(--color-bg-secondary)"
                             strokeWidth="2"
                             className="cursor-[var(--cursor)] hover:fill-white transition-colors duration-200"
                             style={{ '--cursor': handle.cursor } as React.CSSProperties}

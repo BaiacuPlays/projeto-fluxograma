@@ -1,7 +1,8 @@
 import React, { useState, useRef, useCallback, MouseEvent, useEffect } from 'react';
-import { NodeData, EdgeData, Position } from '../types';
+import { NodeData, EdgeData, Position, AnnotationData } from '../types';
 import Node from './Node';
 import Edge, { getClosestConnection, getCurvePath, getConnectionPoints } from './Edge';
+import Annotation from './Annotation';
 
 type SnapTarget = {
     edgeId: string;
@@ -26,12 +27,18 @@ const defaultDimensions = {
 interface CanvasProps {
   nodes: NodeData[];
   edges: EdgeData[];
+  annotations: AnnotationData[];
   setNodes: React.Dispatch<React.SetStateAction<NodeData[]>>;
   setEdges: React.Dispatch<React.SetStateAction<EdgeData[]>>;
+  setAnnotations: React.Dispatch<React.SetStateAction<AnnotationData[]>>;
   updateNodePosition: (id: string, position: Position) => void;
   updateNodeText: (id: string, text: string) => void;
   updateNodeDimensions: (id: string, dimensions: { width: number; height: number }) => void;
   deleteNode: (id: string) => void;
+  updateAnnotationPosition: (id: string, position: Position) => void;
+  updateAnnotationText: (id: string, text: string) => void;
+  updateAnnotationDimensions: (id: string, dimensions: { width: number; height: number }) => void;
+  deleteAnnotation: (id: string) => void;
   autoConnect: boolean;
   onOpenContextMenu: (x: number, y: number, node: NodeData) => void;
   selectedEdgeId: string | null;
@@ -41,14 +48,18 @@ interface CanvasProps {
   fontsLoaded: boolean;
   selectedNodeIds: Set<string>;
   setSelectedNodeIds: React.Dispatch<React.SetStateAction<Set<string>>>;
+  selectedAnnotationIds: Set<string>;
+  setSelectedAnnotationIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   snapToGrid: boolean;
 }
 
 const Canvas: React.FC<CanvasProps> = ({ 
-    nodes, edges, setNodes, setEdges, updateNodePosition, updateNodeText, 
-    updateNodeDimensions, deleteNode, autoConnect, onOpenContextMenu,
+    nodes, edges, annotations, setNodes, setEdges, setAnnotations,
+    updateNodePosition, updateNodeText, updateNodeDimensions, deleteNode, 
+    updateAnnotationPosition, updateAnnotationText, updateAnnotationDimensions, deleteAnnotation,
+    autoConnect, onOpenContextMenu,
     selectedEdgeId, setSelectedEdgeId, deleteEdge, updateEdgeLabel,
-    fontsLoaded, selectedNodeIds, setSelectedNodeIds, snapToGrid
+    fontsLoaded, selectedNodeIds, setSelectedNodeIds, selectedAnnotationIds, setSelectedAnnotationIds, snapToGrid
 }) => {
     const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
     const [isPanning, setIsPanning] = useState(false);
@@ -62,7 +73,8 @@ const Canvas: React.FC<CanvasProps> = ({
     const [dragInfo, setDragInfo] = useState<{
       startMousePos: Position;
       nodeStartPositions: Map<string, Position>;
-      primaryNodeId: string;
+      annotationStartPositions: Map<string, Position>;
+      primaryDragId: string;
     } | null>(null);
 
     const [snapTarget, setSnapTarget] = useState<SnapTarget | null>(null);
@@ -84,52 +96,63 @@ const Canvas: React.FC<CanvasProps> = ({
         return { x: 0, y: 0 };
     }, []);
 
-    const handleNodeMouseDown = (e: React.MouseEvent, nodeId: string) => {
+    const handleItemMouseDown = (e: React.MouseEvent, id: string, type: 'node' | 'annotation') => {
         e.preventDefault();
         
-        const currentSelection = new Set<string>(selectedNodeIds);
-        let newSelection: Set<string>;
+        let newSelectedNodes = new Set(selectedNodeIds);
+        let newSelectedAnnotations = new Set(selectedAnnotationIds);
+
+        const itemIsSelected = type === 'node' ? newSelectedNodes.has(id) : newSelectedAnnotations.has(id);
 
         if (e.shiftKey) {
-            if (currentSelection.has(nodeId)) {
-                currentSelection.delete(nodeId);
+            if (type === 'node') {
+                itemIsSelected ? newSelectedNodes.delete(id) : newSelectedNodes.add(id);
             } else {
-                currentSelection.add(nodeId);
+                itemIsSelected ? newSelectedAnnotations.delete(id) : newSelectedAnnotations.add(id);
             }
-            newSelection = currentSelection;
         } else {
-            if (!currentSelection.has(nodeId)) {
-                newSelection = new Set([nodeId]);
-            } else {
-                newSelection = currentSelection;
+            if (!itemIsSelected) {
+                newSelectedNodes = type === 'node' ? new Set([id]) : new Set();
+                newSelectedAnnotations = type === 'annotation' ? new Set([id]) : new Set();
             }
         }
-        setSelectedNodeIds(newSelection);
+        
+        setSelectedNodeIds(newSelectedNodes);
+        setSelectedAnnotationIds(newSelectedAnnotations);
         setSelectedEdgeId(null);
 
         const nodeStartPositions = new Map<string, Position>();
-        newSelection.forEach(id => {
-            const node = nodes.find(n => n.id === id);
-            if (node) {
-                nodeStartPositions.set(id, node.position);
-            }
+        newSelectedNodes.forEach(nid => {
+            const node = nodes.find(n => n.id === nid);
+            if (node) nodeStartPositions.set(nid, node.position);
+        });
+
+        const annotationStartPositions = new Map<string, Position>();
+        newSelectedAnnotations.forEach(aid => {
+            const ann = annotations.find(a => a.id === aid);
+            if (ann) annotationStartPositions.set(aid, ann.position);
         });
         
         setDragInfo({
             startMousePos: getSVGPoint(e),
             nodeStartPositions,
-            primaryNodeId: nodeId,
+            annotationStartPositions,
+            primaryDragId: id,
         });
     };
 
     const handleMouseDown = (e: MouseEvent<SVGSVGElement>) => {
-        const target = e.target as SVGElement;
+        // FIX: Replaced unsafe type assertion with a type guard for improved type safety.
+        if (!(e.target instanceof Element)) return;
+        const target = e.target;
         const isNodeTarget = target.closest('.node-group');
+        const isAnnotationTarget = target.closest('.annotation-group');
         const isEdgeTarget = target.closest('.group-edge');
 
-        if (!isNodeTarget && !isEdgeTarget) {
+        if (!isNodeTarget && !isAnnotationTarget && !isEdgeTarget) {
             if (!e.shiftKey) {
                 setSelectedNodeIds(new Set());
+                setSelectedAnnotationIds(new Set());
             }
             setSelectedEdgeId(null);
             const startPos = getSVGPoint(e);
@@ -171,12 +194,14 @@ const Canvas: React.FC<CanvasProps> = ({
         } else if (dragInfo) {
             const dx = currentMousePos.x - dragInfo.startMousePos.x;
             const dy = currentMousePos.y - dragInfo.startMousePos.y;
-            const primaryNodeId = dragInfo.primaryNodeId;
 
-            if (dragInfo.nodeStartPositions.size > 1) {
+            const totalSelectionSize = dragInfo.nodeStartPositions.size + dragInfo.annotationStartPositions.size;
+
+            if (totalSelectionSize > 1) {
                 const GRID_SIZE = 20;
                 const snap = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
-                const primaryNodeStartPos = dragInfo.nodeStartPositions.get(primaryNodeId);
+                
+                const primaryNodeStartPos = dragInfo.nodeStartPositions.get(dragInfo.primaryDragId) || dragInfo.annotationStartPositions.get(dragInfo.primaryDragId);
                 if (!primaryNodeStartPos) return;
 
                 let finalDx = dx;
@@ -191,23 +216,31 @@ const Canvas: React.FC<CanvasProps> = ({
                 
                  setNodes(currentNodes => currentNodes.map(node => {
                     const startPos = dragInfo.nodeStartPositions.get(node.id);
-                    if (startPos) {
-                        return { ...node, position: { x: startPos.x + finalDx, y: startPos.y + finalDy } };
-                    }
+                    if (startPos) return { ...node, position: { x: startPos.x + finalDx, y: startPos.y + finalDy } };
                     return node;
                  }));
+                 setAnnotations(currentAnns => currentAnns.map(ann => {
+                    const startPos = dragInfo.annotationStartPositions.get(ann.id);
+                    if (startPos) return { ...ann, position: { x: startPos.x + finalDx, y: startPos.y + finalDy } };
+                    return ann;
+                 }));
+
                  if (snapTarget) setSnapTarget(null);
                  if (displacedNodeInfo) setDisplacedNodeInfo(null);
-            } else { // Single node drag
+            } else { // Single item drag
                  const GRID_SIZE = 20;
                  const snap = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
-                 const startPos = dragInfo.nodeStartPositions.get(dragInfo.primaryNodeId);
+                 const startPos = dragInfo.nodeStartPositions.get(dragInfo.primaryDragId) || dragInfo.annotationStartPositions.get(dragInfo.primaryDragId);
                  if (startPos) {
                     let newPosition = { x: startPos.x + dx, y: startPos.y + dy };
                     if (snapToGrid) {
                         newPosition = { x: snap(newPosition.x), y: snap(newPosition.y) };
                     }
-                    handleSingleNodeDrag(primaryNodeId, newPosition);
+                    if (dragInfo.nodeStartPositions.has(dragInfo.primaryDragId)) {
+                        handleSingleNodeDrag(dragInfo.primaryDragId, newPosition);
+                    } else {
+                        updateAnnotationPosition(dragInfo.primaryDragId, newPosition);
+                    }
                  }
             }
         } else if (selectionBox) {
@@ -241,9 +274,11 @@ const Canvas: React.FC<CanvasProps> = ({
 
     const endDrag = useCallback(() => {
         if (!dragInfo) return;
+        
+        const totalSelectionSize = dragInfo.nodeStartPositions.size + dragInfo.annotationStartPositions.size;
 
-        if (dragInfo.nodeStartPositions.size === 1) {
-            handleSingleNodeDragEnd(dragInfo.primaryNodeId);
+        if (totalSelectionSize === 1 && dragInfo.nodeStartPositions.has(dragInfo.primaryDragId)) {
+            handleSingleNodeDragEnd(dragInfo.primaryDragId);
         } else {
             if (snapTarget) setSnapTarget(null);
         }
@@ -326,16 +361,25 @@ const Canvas: React.FC<CanvasProps> = ({
             const y2 = Math.max(start.y, end.y);
 
             if (Math.abs(start.x - end.x) > 5 || Math.abs(start.y - end.y) > 5) {
-                const newlySelected = new Set<string>(selectedNodeIds);
+                const newlySelectedNodes = new Set<string>(selectedNodeIds);
                 nodes.forEach(node => {
                     const nodeWidth = node.width || defaultDimensions[node.type].width;
                     const nodeHeight = node.height || defaultDimensions[node.type].height;
                     if (node.position.x < x2 && node.position.x + nodeWidth > x1 &&
                         node.position.y < y2 && node.position.y + nodeHeight > y1) {
-                        newlySelected.add(node.id);
+                        newlySelectedNodes.add(node.id);
                     }
                 });
-                setSelectedNodeIds(newlySelected);
+                setSelectedNodeIds(newlySelectedNodes);
+
+                const newlySelectedAnns = new Set<string>(selectedAnnotationIds);
+                annotations.forEach(ann => {
+                    if (ann.position.x < x2 && ann.position.x + ann.width > x1 &&
+                        ann.position.y < y2 && ann.position.y + ann.height > y1) {
+                        newlySelectedAnns.add(ann.id);
+                    }
+                });
+                setSelectedAnnotationIds(newlySelectedAnns);
             }
             setSelectionBox(null);
         }
@@ -348,7 +392,7 @@ const Canvas: React.FC<CanvasProps> = ({
             setReconnecting(null);
             setPreviewLine(null);
         }
-    }, [isPanning, endDrag, selectionBox, connecting, reconnecting, finishConnecting, finishReconnecting, nodes, selectedNodeIds, setSelectedNodeIds]);
+    }, [isPanning, endDrag, selectionBox, connecting, reconnecting, finishConnecting, finishReconnecting, nodes, annotations, selectedNodeIds, setSelectedNodeIds, selectedAnnotationIds, setSelectedAnnotationIds]);
 
 
     const getSVGPointFromEvent = useCallback((e: globalThis.MouseEvent): Position => {
@@ -401,7 +445,8 @@ const Canvas: React.FC<CanvasProps> = ({
     const handleWheel = (e: React.WheelEvent<SVGSVGElement>) => {
         e.preventDefault();
         const zoomFactor = 1.1;
-        const { x, y } = getSVGPoint(e as unknown as MouseEvent);
+        // FIX: Removed incorrect and unnecessary type cast. The 'e' object is already a compatible type.
+        const { x, y } = getSVGPoint(e);
         
         setView(prev => {
             const newZoom = e.deltaY < 0 ? prev.zoom * zoomFactor : prev.zoom / zoomFactor;
@@ -495,11 +540,11 @@ const Canvas: React.FC<CanvasProps> = ({
     }, [nodes, edges, updateNodePosition, snapTarget, displacedNodeInfo]);
     
     const renderSnapPreview = () => {
-        if (!snapTarget || !dragInfo || dragInfo.nodeStartPositions.size > 1) return null;
+        if (!snapTarget || !dragInfo || (dragInfo.nodeStartPositions.size + dragInfo.annotationStartPositions.size) > 1) return null;
 
         const sourceNode = nodes.find(n => n.id === snapTarget.sourceNodeId);
         const targetNode = nodes.find(n => n.id === snapTarget.targetNodeId);
-        const draggedNode = nodes.find(n => n.id === dragInfo.primaryNodeId);
+        const draggedNode = nodes.find(n => n.id === dragInfo.primaryDragId);
 
         if (!sourceNode || !targetNode || !draggedNode) return null;
 
@@ -511,8 +556,8 @@ const Canvas: React.FC<CanvasProps> = ({
         
         return (
             <g className="pointer-events-none">
-                <path d={path1} stroke="#22D3EE" strokeWidth="2" fill="none" strokeDasharray="6,6" />
-                <path d={path2} stroke="#22D3EE" strokeWidth="2" fill="none" strokeDasharray="6,6" />
+                <path d={path1} stroke="var(--color-accent)" strokeWidth="2" fill="none" strokeDasharray="6,6" />
+                <path d={path2} stroke="var(--color-accent)" strokeWidth="2" fill="none" strokeDasharray="6,6" />
             </g>
         )
     }
@@ -532,15 +577,15 @@ const Canvas: React.FC<CanvasProps> = ({
             onMouseMove={handleMouseMove}
             onWheel={handleWheel}
             onContextMenu={(e) => {
-                const target = e.target as SVGElement;
-                if (!target.closest('.node-group')) {
+                const target = e.target;
+                if (!(target instanceof Element) || !target.closest('.node-group')) {
                     e.preventDefault();
                 }
             }}
         >
             <defs>
                 <pattern id="pattern-dots" x={view.x % (20 * view.zoom)} y={view.y % (20 * view.zoom)} width={20 * view.zoom} height={20 * view.zoom} patternUnits="userSpaceOnUse">
-                    <circle cx="1" cy="1" r="1" fill="#374151"></circle>
+                    <circle cx="1" cy="1" r="1" fill="var(--color-border)"></circle>
                 </pattern>
                 <radialGradient id="grad-start">
                     <stop offset="0%" stopColor="#10B981" />
@@ -558,6 +603,9 @@ const Canvas: React.FC<CanvasProps> = ({
                     <stop offset="0%" stopColor="#8B5CF6" />
                     <stop offset="100%" stopColor="#7C3AED" />
                 </linearGradient>
+                <filter id="annotation-shadow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feDropShadow dx="3" dy="5" stdDeviation="5" floodColor="var(--color-shadow)" floodOpacity="0.4" />
+                </filter>
             </defs>
 
             <rect width="100%" height="100%" fill="url(#pattern-dots)" />
@@ -581,6 +629,20 @@ const Canvas: React.FC<CanvasProps> = ({
                     />
                 ))}
 
+                {annotations.map((ann) => (
+                    <Annotation
+                        key={ann.id}
+                        data={ann}
+                        onPositionChange={updateAnnotationPosition}
+                        onTextChange={updateAnnotationText}
+                        onSizeChange={updateAnnotationDimensions}
+                        onDelete={deleteAnnotation}
+                        onMouseDown={(e) => handleItemMouseDown(e, ann.id, 'annotation')}
+                        isSelected={selectedAnnotationIds.has(ann.id)}
+                        viewZoom={view.zoom}
+                    />
+                ))}
+
                 {/* Then render all nodes */}
                 {nodes.map((node) => (
                     <Node
@@ -594,8 +656,11 @@ const Canvas: React.FC<CanvasProps> = ({
                         onOpenContextMenu={onOpenContextMenu}
                         isConnecting={!!connecting || !!reconnecting}
                         viewZoom={view.zoom}
-                        onInteractionStart={() => setSelectedEdgeId(null)}
-                        onNodeMouseDown={handleNodeMouseDown}
+                        onInteractionStart={() => {
+                            setSelectedEdgeId(null);
+                            setSelectedAnnotationIds(new Set());
+                        }}
+                        onMouseDown={(e) => handleItemMouseDown(e, node.id, 'node')}
                         isSelected={selectedNodeIds.has(node.id)}
                         fontsLoaded={fontsLoaded}
                     />
@@ -623,7 +688,7 @@ const Canvas: React.FC<CanvasProps> = ({
                 {previewLine && (
                     <path
                         d={getCurvePath(previewLine.start, -1, previewLine.end, -1).path}
-                        stroke="#06b6d4"
+                        stroke="var(--color-accent)"
                         strokeWidth="2"
                         fill="none"
                         strokeDasharray="6,6"
@@ -638,7 +703,7 @@ const Canvas: React.FC<CanvasProps> = ({
                         width={Math.abs(selectionBox.start.x - selectionBox.end.x)}
                         height={Math.abs(selectionBox.start.y - selectionBox.end.y)}
                         fill="rgba(34, 211, 238, 0.2)"
-                        stroke="rgba(34, 211, 238, 0.8)"
+                        stroke="var(--color-accent)"
                         strokeWidth={1 / view.zoom}
                         strokeDasharray={`${4 / view.zoom} ${2 / view.zoom}`}
                         className="pointer-events-none"

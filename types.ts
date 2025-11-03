@@ -25,7 +25,16 @@ export interface EdgeData {
   targetHandle?: number;
 }
 
+export interface AnnotationData {
+  id: string;
+  text: string;
+  position: Position;
+  width: number;
+  height: number;
+}
+
 export interface FlowchartData {
   nodes: NodeData[];
   edges: EdgeData[];
+  annotations?: AnnotationData[];
 }

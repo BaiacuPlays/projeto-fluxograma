@@ -1,6 +1,7 @@
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { NodeData, EdgeData, NodeType, Position, FlowchartData } from './types';
+import { NodeData, EdgeData, NodeType, Position, FlowchartData, AnnotationData } from './types';
 import Canvas from './components/Canvas';
 import Sidebar from './components/Sidebar';
 import ContextMenu from './components/ContextMenu';
@@ -81,8 +82,36 @@ const sanitizeFlowchartData = (data: any): FlowchartData => {
             };
         })
         .filter((e): e is EdgeData => e !== null);
+        
+    const seenAnnotationIds = new Set<string>();
+    const sanitizedAnnotations = (Array.isArray(data.annotations) ? data.annotations : [])
+        .map((a: any) => {
+            if (!a || typeof a.id !== 'string' || !a.id.trim()) return null;
+            if (seenAnnotationIds.has(a.id)) return null;
 
-    return { nodes: sanitizedNodes, edges: sanitizedEdges };
+            seenAnnotationIds.add(a.id);
+            
+            const position = a.position || {};
+            const x = parseFloat(position.x);
+            const y = parseFloat(position.y);
+            if (!isFinite(x) || !isFinite(y)) return null;
+
+            const width = parseFloat(a.width);
+            const height = parseFloat(a.height);
+            if (!isFinite(width) || !isFinite(height)) return null;
+
+            return {
+                id: a.id,
+                text: typeof a.text === 'string' ? a.text : 'Anotação',
+                position: { x, y },
+                width: width,
+                height: height,
+            };
+        })
+        .filter((a): a is AnnotationData => a !== null);
+
+
+    return { nodes: sanitizedNodes, edges: sanitizedEdges, annotations: sanitizedAnnotations };
 };
 
 const loadInitialData = (): FlowchartData => {
@@ -94,7 +123,16 @@ const loadInitialData = (): FlowchartData => {
   } catch (error) {
     console.error("Falha ao carregar o fluxograma do armazenamento local.", error);
   }
-  return { nodes: [], edges: [] };
+  return { nodes: [], edges: [], annotations: [] };
+};
+
+const getInitialTheme = (): 'light' | 'dark' => {
+  const savedTheme = window.localStorage.getItem('flowchart-theme');
+  if (savedTheme === 'light' || savedTheme === 'dark') {
+    return savedTheme;
+  }
+  // Remove a detecção de preferência do sistema para definir o escuro como padrão.
+  return 'dark';
 };
 
 
@@ -102,14 +140,17 @@ const App: React.FC = () => {
   const [initialFlowchartData] = useState(loadInitialData);
   const [nodes, setNodes] = useState<NodeData[]>(initialFlowchartData.nodes);
   const [edges, setEdges] = useState<EdgeData[]>(initialFlowchartData.edges);
+  const [annotations, setAnnotations] = useState<AnnotationData[]>(initialFlowchartData.annotations || []);
   
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
+  const [selectedAnnotationIds, setSelectedAnnotationIds] = useState<Set<string>>(new Set());
   const [autoConnect, setAutoConnect] = useState<boolean>(true);
   const [snapToGrid, setSnapToGrid] = useState<boolean>(true);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: NodeData } | null>(null);
   const [fontsLoaded, setFontsLoaded] = useState(false);
   const [isPermissionModalOpen, setIsPermissionModalOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(getInitialTheme);
 
   const [history, setHistory] = useState<FlowchartData[]>([initialFlowchartData]);
   const [historyIndex, setHistoryIndex] = useState(0);
@@ -123,6 +164,19 @@ const App: React.FC = () => {
   }, []);
   
   useEffect(() => {
+    if (theme === 'light') {
+      document.documentElement.classList.add('light');
+    } else {
+      document.documentElement.classList.remove('light');
+    }
+    try {
+      localStorage.setItem('flowchart-theme', theme);
+    } catch (error) {
+      console.error('Falha ao salvar o tema no localStorage.', error);
+    }
+  }, [theme]);
+  
+  useEffect(() => {
       if (isRestoring.current) {
         isRestoring.current = false;
         return;
@@ -133,7 +187,7 @@ const App: React.FC = () => {
       }
 
       debounceTimeout.current = window.setTimeout(() => {
-        const currentState = { nodes, edges };
+        const currentState = { nodes, edges, annotations };
         const lastState = history[historyIndex];
         
         if (JSON.stringify(currentState) === JSON.stringify(lastState)) {
@@ -157,7 +211,7 @@ const App: React.FC = () => {
           clearTimeout(debounceTimeout.current);
         }
       };
-    }, [nodes, edges, history, historyIndex]);
+    }, [nodes, edges, annotations, history, historyIndex]);
 
   const handleUndo = useCallback(() => {
     if (historyIndex > 0) {
@@ -167,6 +221,7 @@ const App: React.FC = () => {
         const prevState = history[newIndex];
         setNodes(prevState.nodes);
         setEdges(prevState.edges);
+        setAnnotations(prevState.annotations || []);
     }
   }, [history, historyIndex]);
 
@@ -178,6 +233,7 @@ const App: React.FC = () => {
         const nextState = history[newIndex];
         setNodes(nextState.nodes);
         setEdges(nextState.edges);
+        setAnnotations(nextState.annotations || []);
     }
   }, [history, historyIndex]);
 
@@ -196,6 +252,40 @@ const App: React.FC = () => {
     };
     setNodes((nds) => [...nds, newNode]);
   }, [snapToGrid]);
+
+  const addAnnotation = useCallback(() => {
+    const GRID_SIZE = 20;
+    const snap = (val: number) => Math.round(val / GRID_SIZE) * GRID_SIZE;
+
+    const initialPos = { x: Math.random() * 200 + 50, y: Math.random() * 100 + 50 };
+    const finalPos = snapToGrid ? { x: snap(initialPos.x), y: snap(initialPos.y) } : initialPos;
+    
+    const newAnnotation: AnnotationData = {
+      id: `annotation-${Date.now()}`,
+      text: 'Clique duas vezes para editar...',
+      position: finalPos,
+      width: 160,
+      height: 120,
+    };
+    setAnnotations((anns) => [...anns, newAnnotation]);
+  }, [snapToGrid]);
+
+  const updateAnnotationPosition = useCallback((id: string, position: Position) => {
+    setAnnotations((prev) => prev.map((ann) => ann.id === id ? { ...ann, position } : ann));
+  }, []);
+
+  const updateAnnotationText = useCallback((id: string, text: string) => {
+    setAnnotations((prev) => prev.map((ann) => ann.id === id ? { ...ann, text } : ann));
+  }, []);
+
+  const updateAnnotationDimensions = useCallback((id: string, dimensions: { width: number; height: number }) => {
+    setAnnotations((prev) => prev.map((ann) => ann.id === id ? { ...ann, ...dimensions } : ann));
+  }, []);
+
+  const deleteAnnotation = useCallback((id: string) => {
+    setAnnotations((prev) => prev.filter((ann) => ann.id !== id));
+  }, []);
+
 
   const updateNodePosition = useCallback((id: string, position: { x: number; y: number }) => {
     setNodes((prevNodes) =>
@@ -374,6 +464,7 @@ const App: React.FC = () => {
         
         setSelectedNodeIds(new Set(newNodes.map(n => n.id)));
         setSelectedEdgeId(null);
+        setSelectedAnnotationIds(new Set());
         
     } catch (err) {
         console.warn('Falha ao colar da área de transferência:', err);
@@ -429,11 +520,16 @@ const App: React.FC = () => {
                 setEdges(eds => eds.filter(e => !nodeIdsToDelete.includes(e.source) && !nodeIdsToDelete.includes(e.target)));
                 setSelectedNodeIds(new Set());
             }
+             if (selectedAnnotationIds.size > 0) {
+                const annotationIdsToDelete = Array.from(selectedAnnotationIds);
+                setAnnotations(anns => anns.filter(a => !annotationIdsToDelete.includes(a.id)));
+                setSelectedAnnotationIds(new Set());
+            }
         }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedEdgeId, deleteEdge, selectedNodeIds, handleCopy, handlePaste, setNodes, setEdges, handleUndo, handleRedo]);
+  }, [selectedEdgeId, deleteEdge, selectedNodeIds, selectedAnnotationIds, handleCopy, handlePaste, setNodes, setEdges, setAnnotations, handleUndo, handleRedo]);
 
 
   const openContextMenu = (x: number, y: number, node: NodeData) => {
@@ -469,7 +565,7 @@ const App: React.FC = () => {
         return;
     }
 
-    if (nodes.length === 0) {
+    if (nodes.length === 0 && annotations.length === 0) {
         alert("Não há nada para exportar!");
         return;
     }
@@ -484,6 +580,13 @@ const App: React.FC = () => {
         minY = Math.min(minY, node.position.y);
         maxX = Math.max(maxX, node.position.x + nodeWidth);
         maxY = Math.max(maxY, node.position.y + nodeHeight);
+    });
+
+    annotations.forEach(ann => {
+        minX = Math.min(minX, ann.position.x);
+        minY = Math.min(minY, ann.position.y);
+        maxX = Math.max(maxX, ann.position.x + ann.width);
+        maxY = Math.max(maxY, ann.position.y + ann.height);
     });
 
     const contentWidth = maxX - minX;
@@ -506,7 +609,7 @@ const App: React.FC = () => {
         const dataUrl = await toPng(svgElement, {
             width: exportWidth,
             height: exportHeight,
-            backgroundColor: '#111827', // --color-bg
+            backgroundColor: theme === 'dark' ? '#111827' : '#F9FAFB',
             fontEmbedCSS: fontCSS,
         });
         
@@ -527,11 +630,11 @@ const App: React.FC = () => {
             gElement.removeAttribute('transform');
         }
     }
-}, [nodes]);
+}, [nodes, annotations, theme]);
 
 
   const handleExportJSON = useCallback(() => {
-      const data = { nodes, edges };
+      const data = { nodes, edges, annotations };
       const jsonString = JSON.stringify(data, null, 2);
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -540,7 +643,7 @@ const App: React.FC = () => {
       link.href = url;
       link.click();
       URL.revokeObjectURL(url);
-  }, [nodes, edges]);
+  }, [nodes, edges, annotations]);
 
   const handleImportJSON = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
       const file = event.target.files?.[0];
@@ -560,10 +663,12 @@ const App: React.FC = () => {
               if (window.confirm('Isso substituirá o fluxograma atual. Deseja continuar?')) {
                   setNodes(sanitizedData.nodes);
                   setEdges(sanitizedData.edges);
+                  setAnnotations(sanitizedData.annotations || []);
                   setHistory([sanitizedData]);
                   setHistoryIndex(0);
                   setSelectedNodeIds(new Set());
                   setSelectedEdgeId(null);
+                  setSelectedAnnotationIds(new Set());
               }
           } catch (error) {
               alert(`Erro ao importar o arquivo: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
@@ -582,22 +687,24 @@ const App: React.FC = () => {
   
   const handleClear = useCallback(() => {
     if (window.confirm('Tem certeza que deseja limpar o fluxograma? Todo o progresso salvo localmente será perdido.')) {
-        const emptyState: FlowchartData = { nodes: [], edges: [] };
+        const emptyState: FlowchartData = { nodes: [], edges: [], annotations: [] };
         setNodes(emptyState.nodes);
         setEdges(emptyState.edges);
+        setAnnotations(emptyState.annotations || []);
         setHistory([emptyState]);
         setHistoryIndex(0);
         setSelectedEdgeId(null);
         setSelectedNodeIds(new Set());
+        setSelectedAnnotationIds(new Set());
     }
   }, []);
 
   return (
-    <div className="flex h-screen font-sans bg-[#111827] text-gray-100 overflow-hidden" onClick={closeContextMenu}>
-      <div className="w-72 flex flex-col bg-[#1F2937] border-r border-[#374151] shadow-lg">
-          <header className="p-4 border-b border-[#374151]">
-              <h1 className="text-2xl font-bold text-[#22D3EE]">Criador de Fluxogramas</h1>
-              <p className="text-sm text-gray-400 mt-1">Crie, visualize e edite seus processos.</p>
+    <div className="flex h-screen font-sans bg-[var(--color-bg)] text-[var(--color-text-primary)] overflow-hidden" onClick={closeContextMenu}>
+      <div className="w-72 flex flex-col bg-[var(--color-bg-secondary)] border-r border-[var(--color-border)] shadow-lg">
+          <header className="p-4 border-b border-[var(--color-border)]">
+              <h1 className="text-2xl font-bold text-[var(--color-accent)]">Criador de Fluxogramas</h1>
+              <p className="text-sm text-[var(--color-text-secondary)] mt-1">Crie, visualize e edite seus processos.</p>
           </header>
           
           <Sidebar 
@@ -610,19 +717,28 @@ const App: React.FC = () => {
             onExportJSON={handleExportJSON}
             onImportJSON={handleImportJSON}
             onClear={handleClear}
+            onAddAnnotation={addAnnotation}
+            theme={theme}
+            setTheme={setTheme}
           />
           
       </div>
-      <main className="flex-1 relative bg-[#111827]">
+      <main className="flex-1 relative bg-[var(--color-bg)]">
         <Canvas
           nodes={nodes}
           edges={edges}
+          annotations={annotations}
           setNodes={setNodes}
           setEdges={setEdges}
+          setAnnotations={setAnnotations}
           updateNodePosition={updateNodePosition}
           updateNodeText={updateNodeText}
           updateNodeDimensions={updateNodeDimensions}
           deleteNode={deleteNode}
+          updateAnnotationPosition={updateAnnotationPosition}
+          updateAnnotationText={updateAnnotationText}
+          updateAnnotationDimensions={updateAnnotationDimensions}
+          deleteAnnotation={deleteAnnotation}
           autoConnect={autoConnect}
           onOpenContextMenu={openContextMenu}
           selectedEdgeId={selectedEdgeId}
@@ -632,9 +748,11 @@ const App: React.FC = () => {
           fontsLoaded={fontsLoaded}
           selectedNodeIds={selectedNodeIds}
           setSelectedNodeIds={setSelectedNodeIds}
+          selectedAnnotationIds={selectedAnnotationIds}
+          setSelectedAnnotationIds={setSelectedAnnotationIds}
           snapToGrid={snapToGrid}
         />
-        <div className="absolute bottom-4 right-4 bg-[#1F2937]/80 backdrop-blur-sm p-3 rounded-lg text-xs text-gray-300 shadow-lg flex items-center gap-6 border border-[#374151]">
+        <div className="absolute bottom-4 right-4 bg-[var(--color-bg-secondary)]/80 backdrop-blur-sm p-3 rounded-lg text-xs text-[var(--color-text-secondary)] shadow-lg flex items-center gap-6 border border-[var(--color-border)]">
             <div className="flex items-center gap-2"><StartIcon className="w-4 h-4 text-green-400"/> Início/Fim</div>
             <div className="flex items-center gap-2"><ProcessIcon className="w-4 h-4 text-blue-400"/> Processo</div>
             <div className="flex items-center gap-2"><DecisionIcon className="w-4 h-4 text-purple-400"/> Decisão</div>

@@ -12,17 +12,36 @@
         :root {
             --color-bg: #111827;
             --color-bg-secondary: #1F2937;
+            --color-bg-tertiary: #2d3748;
+            --color-bg-tertiary-hover: #4a5568;
             --color-border: #374151;
             --color-text-primary: #F9FAFB;
             --color-text-secondary: #9CA3AF;
             --color-accent: #22D3EE;
+            --color-shadow: #000000;
+            --color-bg-overlay: rgba(17, 24, 39, 0.6);
             --font-sans: 'Inter', sans-serif;
         }
+        
+        html.light {
+            --color-bg: #F9FAFB;
+            --color-bg-secondary: #F3F4F6;
+            --color-bg-tertiary: #FFFFFF;
+            --color-bg-tertiary-hover: #F9FAFB;
+            --color-border: #E5E7EB;
+            --color-text-primary: #1F2937;
+            --color-text-secondary: #6B7280;
+            --color-accent: #0891B2;
+            --color-shadow: #9CA3AF;
+            --color-bg-overlay: rgba(229, 231, 235, 0.6);
+        }
+
         body {
             font-family: var(--font-sans);
             background-color: var(--color-bg);
             color: var(--color-text-primary);
             overscroll-behavior: none;
+            transition: background-color 0.3s ease, color 0.3s ease;
         }
         
         .node-shape {
@@ -59,14 +78,20 @@
             background: #4B5563;
             border-radius: 10px;
         }
+        html.light .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #D1D5DB;
+        }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
             background: #6B7280;
+        }
+        html.light .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+             background: #9CA3AF;
         }
         
         textarea::-webkit-scrollbar { width: 5px; }
         textarea::-webkit-scrollbar-track { background: transparent; }
-        textarea::-webkit-scrollbar-thumb { background: #4B5563; border-radius: 10px; }
-        textarea::-webkit-scrollbar-thumb:hover { background: #6B7280; }
+        textarea::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 10px; }
+        textarea::-webkit-scrollbar-thumb:hover { background: var(--color-text-secondary); }
 
         .edge-hitbox {
             stroke: transparent;
@@ -78,7 +103,7 @@
             transition: stroke 0.2s ease-in-out, stroke-width 0.2s ease-in-out;
         }
         .group-edge:hover .edge-path {
-            stroke: #06b6d4;
+            stroke: var(--color-accent);
         }
         .edge-path.selected {
             stroke: var(--color-accent);

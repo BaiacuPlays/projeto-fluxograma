@@ -79,7 +79,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, node, onClose, onDelete
         }, [parentRef]);
         
         return (
-            <div ref={submenuRef} style={style} className="absolute bg-[#2a3546] rounded-md shadow-2xl p-2 z-20 border border-[#374151] transition-opacity">
+            <div ref={submenuRef} style={style} className="absolute bg-[var(--color-bg-tertiary)] rounded-md shadow-2xl p-2 z-20 border border-[var(--color-border)] transition-opacity">
                 {children}
             </div>
         )
@@ -92,13 +92,13 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, node, onClose, onDelete
         <div
             ref={menuRef}
             style={{ top: `${position.y}px`, left: `${position.x}px` }}
-            className="absolute z-50 w-56 bg-[#1F2937] text-gray-200 rounded-lg shadow-xl border border-[#374151] p-2 animate-fade-in"
+            className="absolute z-50 w-56 bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] rounded-lg shadow-xl border border-[var(--color-border)] p-2 animate-fade-in"
             onClick={(e) => e.stopPropagation()}
             onContextMenu={(e) => e.preventDefault()}
         >
             <ul className="space-y-1">
                  <li ref={shapeSubmenuRef} className="relative" onMouseEnter={() => setOpenSubmenu('shape')} onMouseLeave={() => setOpenSubmenu(null)}>
-                    <button className="flex items-center w-full text-left p-2 rounded-md hover:bg-[#374151] transition-colors duration-150">
+                    <button className="flex items-center w-full text-left p-2 rounded-md hover:bg-[var(--color-bg-tertiary-hover)] transition-colors duration-150">
                         <ShapeIcon className="w-5 h-5 mr-3" />
                         <span className="flex-grow">Mudar Formato</span>
                         <ChevronRightIcon className="w-4 h-4" />
@@ -108,7 +108,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, node, onClose, onDelete
                             <ul className="space-y-1 w-40">
                                 {nodeTypes.map(item => (
                                     <li key={item.type}>
-                                        <button onClick={handleAction(() => onChangeType(node.id, item.type))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[#374151] transition-colors duration-150">
+                                        <button onClick={handleAction(() => onChangeType(node.id, item.type))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[var(--color-bg-tertiary-hover)] transition-colors duration-150">
                                             {item.icon}
                                             <span className="ml-3">{item.label}</span>
                                         </button>
@@ -120,7 +120,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, node, onClose, onDelete
                 </li>
 
                  <li ref={colorSubmenuRef} className="relative" onMouseEnter={() => setOpenSubmenu('color')} onMouseLeave={() => setOpenSubmenu(null)}>
-                    <button className="flex items-center w-full text-left p-2 rounded-md hover:bg-[#374151] transition-colors duration-150">
+                    <button className="flex items-center w-full text-left p-2 rounded-md hover:bg-[var(--color-bg-tertiary-hover)] transition-colors duration-150">
                         <ColorPaletteIcon className="w-5 h-5 mr-3" />
                         <span className="flex-grow">Mudar Cor</span>
                         <ChevronRightIcon className="w-4 h-4" />
@@ -133,7 +133,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, node, onClose, onDelete
                                          <button key={color} onClick={handleAction(() => onChangeColor(node.id, color))} className="w-8 h-8 rounded-full border-2 border-transparent hover:border-white transition-all" style={{ backgroundColor: color }} />
                                      ))}
                                  </div>
-                                 <button onClick={handleAction(() => onChangeColor(node.id, undefined))} className="w-full text-xs p-2 rounded-md hover:bg-[#374151] transition-colors duration-150">
+                                 <button onClick={handleAction(() => onChangeColor(node.id, undefined))} className="w-full text-xs p-2 rounded-md hover:bg-[var(--color-bg-tertiary-hover)] transition-colors duration-150">
                                      Restaurar Padrão
                                  </button>
                              </div>
@@ -142,29 +142,29 @@ const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, node, onClose, onDelete
                 </li>
 
                 <li>
-                    <button onClick={handleAction(() => onResetSize(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[#374151] transition-colors duration-150">
+                    <button onClick={handleAction(() => onResetSize(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[var(--color-bg-tertiary-hover)] transition-colors duration-150">
                         <ResetSizeIcon className="w-5 h-5 mr-3" />
                         <span>Redefinir Tamanho</span>
                     </button>
                 </li>
 
                 <li>
-                    <button onClick={handleAction(() => onAddChild(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[#374151] transition-colors duration-150">
+                    <button onClick={handleAction(() => onAddChild(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[var(--color-bg-tertiary-hover)] transition-colors duration-150">
                         <AddChildIcon className="w-5 h-5 mr-3" />
                         <span>Adicionar Bloco Filho</span>
                     </button>
                 </li>
                 
-                <div className="h-px bg-[#374151] my-1"></div>
+                <div className="h-px bg-[var(--color-border)] my-1"></div>
 
                 <li>
-                    <button onClick={handleAction(() => onRemoveConnections(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[#374151] transition-colors duration-150">
+                    <button onClick={handleAction(() => onRemoveConnections(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[var(--color-bg-tertiary-hover)] transition-colors duration-150">
                         <DisconnectIcon className="w-5 h-5 mr-3" />
                         <span>Remover Conexões</span>
                     </button>
                 </li>
                 <li>
-                    <button onClick={handleAction(() => onDelete(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-[#374151] text-red-400 transition-colors duration-150">
+                    <button onClick={handleAction(() => onDelete(node.id))} className="flex items-center w-full text-left p-2 rounded-md hover:bg-red-500/20 text-red-400 transition-colors duration-150">
                         <TrashIcon className="w-5 h-5 mr-3" />
                         <span>Deletar Bloco</span>
                     </button>

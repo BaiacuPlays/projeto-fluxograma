@@ -172,7 +172,7 @@ const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSel
     }
   };
 
-  const strokeColor = isSelected || isSnapTarget ? 'var(--color-accent)' : '#9CA3AF';
+  const strokeColor = isSelected || isSnapTarget ? 'var(--color-accent)' : 'var(--color-text-secondary)';
   const strokeWidth = isSelected || isSnapTarget ? 3 : 2;
 
   return (
@@ -219,7 +219,7 @@ const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSel
                 cy={finalSourcePos.y}
                 r={8}
                 fill="var(--color-accent)"
-                stroke="#111827"
+                stroke="var(--color-bg)"
                 strokeWidth="2"
                 className="cursor-move"
                 onMouseDown={(e) => { e.stopPropagation(); onStartReconnecting(edge.id, 'source'); }}
@@ -229,7 +229,7 @@ const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSel
                 cy={finalTargetPos.y}
                 r={8}
                 fill="var(--color-accent)"
-                stroke="#111827"
+                stroke="var(--color-bg)"
                 strokeWidth="2"
                 className="cursor-move"
                 onMouseDown={(e) => { e.stopPropagation(); onStartReconnecting(edge.id, 'target'); }}
@@ -247,7 +247,7 @@ const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSel
                 onBlur={handleLabelSave}
                 onKeyDown={handleKeyDown}
                 onClick={(e) => e.stopPropagation()}
-                className="w-full h-full px-2 py-1 text-center bg-[#111827] text-white border border-cyan-400 rounded-md text-sm"
+                className="w-full h-full px-2 py-1 text-center bg-[var(--color-bg)] text-[var(--color-text-primary)] border border-[var(--color-accent)] rounded-md text-sm"
             />
         </foreignObject>
       ) : (
@@ -257,9 +257,9 @@ const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSel
                 y={labelPos.y}
                 textAnchor="middle"
                 dominantBaseline="middle"
-                className="fill-gray-300 text-xs font-sans font-medium pointer-events-none"
+                className="fill-[var(--color-text-secondary)] text-xs font-sans font-medium pointer-events-none"
                 paintOrder="stroke"
-                stroke="#1F2937"
+                stroke="var(--color-bg)"
                 strokeWidth="4px"
                 strokeLinejoin="round"
             >

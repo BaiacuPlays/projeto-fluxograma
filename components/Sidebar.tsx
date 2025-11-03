@@ -1,6 +1,7 @@
+
 import React, { useRef } from 'react';
 import { NodeData, NodeType } from '../types';
-import { StartIcon, ProcessIcon, DecisionIcon, EndIcon, AddIcon, DownloadIcon, UploadIcon, TrashIcon } from './Icons';
+import { StartIcon, ProcessIcon, DecisionIcon, EndIcon, AddIcon, DownloadIcon, UploadIcon, TrashIcon, AnnotationIcon, SunIcon, MoonIcon } from './Icons';
 
 interface SidebarProps {
   addNode: (type: NodeType) => void;
@@ -12,12 +13,15 @@ interface SidebarProps {
   onExportJSON: () => void;
   onImportJSON: (event: React.ChangeEvent<HTMLInputElement>) => void;
   onClear: () => void;
+  onAddAnnotation: () => void;
+  theme: 'light' | 'dark';
+  setTheme: React.Dispatch<React.SetStateAction<'light' | 'dark'>>;
 }
 
 const ActionButton: React.FC<{ text: string, icon: React.ReactNode, onClick: () => void }> = ({ text, icon, onClick }) => (
     <button
         onClick={onClick}
-        className="flex items-center w-full p-3 text-left bg-[#2d3748] hover:bg-[#4a5568] rounded-lg transition-all duration-200 shadow-sm border border-transparent hover:border-[#5a6578] transform hover:scale-105"
+        className="flex items-center w-full p-3 text-left bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-tertiary-hover)] rounded-lg transition-all duration-200 shadow-sm border border-transparent hover:border-[var(--color-border)] transform hover:scale-105"
     >
         <div className="w-6 h-6 mr-4 flex-shrink-0 flex items-center justify-center">{icon}</div>
         <span className="flex-grow font-medium text-sm">{text}</span>
@@ -39,16 +43,20 @@ const NodeButton: React.FC<{ type: NodeType, text: string, icon: React.ReactNode
     return (
         <button
             onClick={onClick}
-            className="flex items-center w-full p-3 text-left bg-[#2d3748] hover:bg-[#4a5568] rounded-lg transition-all duration-200 shadow-sm border border-transparent hover:border-[#5a6578] transform hover:scale-105"
+            className="flex items-center w-full p-3 text-left bg-[var(--color-bg-tertiary)] hover:bg-[var(--color-bg-tertiary-hover)] rounded-lg transition-all duration-200 shadow-sm border border-transparent hover:border-[var(--color-border)] transform hover:scale-105"
         >
             <div className="w-8 h-8 mr-4 flex-shrink-0 flex items-center justify-center">{icon}</div>
             <span className="flex-grow font-medium">{text}</span>
-            <AddIcon className="w-6 h-6 text-gray-400" />
+            <AddIcon className="w-6 h-6 text-[var(--color-text-secondary)]" />
         </button>
     )
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ addNode, autoConnect, setAutoConnect, snapToGrid, setSnapToGrid, onExportPNG, onExportJSON, onImportJSON, onClear }) => {
+const Sidebar: React.FC<SidebarProps> = ({ 
+    addNode, autoConnect, setAutoConnect, snapToGrid, setSnapToGrid, 
+    onExportPNG, onExportJSON, onImportJSON, onClear, onAddAnnotation,
+    theme, setTheme
+}) => {
   const importInputRef = useRef<HTMLInputElement>(null);
   
   const handleImportClick = () => {
@@ -56,8 +64,8 @@ const Sidebar: React.FC<SidebarProps> = ({ addNode, autoConnect, setAutoConnect,
   };
 
   return (
-    <div className="flex-grow overflow-y-auto p-4 border-t border-[#374151] custom-scrollbar">
-      <h2 className="text-lg font-semibold mb-4 text-gray-300">Adicionar Blocos</h2>
+    <div className="flex-grow overflow-y-auto p-4 border-t border-[var(--color-border)] custom-scrollbar">
+      <h2 className="text-lg font-semibold mb-4 text-[var(--color-text-secondary)]">Adicionar Blocos</h2>
       <div className="space-y-3">
         <NodeButton 
             text="Início" 
@@ -85,22 +93,27 @@ const Sidebar: React.FC<SidebarProps> = ({ addNode, autoConnect, setAutoConnect,
         />
       </div>
 
-       <div className="mt-6 pt-4 border-t border-[#374151]">
-          <h3 className="text-base font-semibold mb-3 text-gray-300">Ações</h3>
+       <div className="mt-6 pt-4 border-t border-[var(--color-border)]">
+          <h3 className="text-base font-semibold mb-3 text-[var(--color-text-secondary)]">Ações</h3>
           <div className="space-y-3">
+               <ActionButton 
+                  text="Adicionar Anotação"
+                  icon={<AnnotationIcon className="text-amber-400 w-5 h-5" />}
+                  onClick={onAddAnnotation}
+              />
               <ActionButton 
                   text="Exportar para PNG"
-                  icon={<DownloadIcon className="text-cyan-300" />}
+                  icon={<DownloadIcon className="text-[var(--color-accent)]" />}
                   onClick={onExportPNG}
               />
               <ActionButton 
                   text="Exportar para JSON"
-                  icon={<DownloadIcon className="text-cyan-300" />}
+                  icon={<DownloadIcon className="text-[var(--color-accent)]" />}
                   onClick={onExportJSON}
               />
                <ActionButton 
                   text="Importar de JSON"
-                  icon={<UploadIcon className="text-cyan-300" />}
+                  icon={<UploadIcon className="text-[var(--color-accent)]" />}
                   onClick={handleImportClick}
               />
                <input
@@ -124,19 +137,41 @@ const Sidebar: React.FC<SidebarProps> = ({ addNode, autoConnect, setAutoConnect,
           </div>
       </div>
 
-       <div className="mt-6 pt-4 border-t border-[#374151]">
-          <h3 className="text-base font-semibold mb-3 text-gray-300">Configurações</h3>
+       <div className="mt-6 pt-4 border-t border-[var(--color-border)]">
+          <h3 className="text-base font-semibold mb-3 text-[var(--color-text-secondary)]">Configurações</h3>
           <div className="flex items-center justify-between">
-              <label htmlFor="auto-connect-toggle" className="font-medium text-sm text-gray-200 cursor-pointer">
+              <label htmlFor="theme-toggle" className="font-medium text-sm text-[var(--color-text-primary)] cursor-pointer">
+                  Tema
+                  <p className="text-xs text-[var(--color-text-secondary)] font-normal mt-1">Alternar entre claro e escuro</p>
+              </label>
+              <div className="flex items-center bg-[var(--color-bg)] p-1 rounded-full">
+                  <button
+                      onClick={() => setTheme('light')}
+                      className={`p-1.5 rounded-full transition-colors ${theme === 'light' ? 'bg-[var(--color-accent)] text-white' : 'text-gray-400 hover:text-white'}`}
+                      aria-label="Mudar para tema claro"
+                  >
+                      <SunIcon className="w-5 h-5" />
+                  </button>
+                   <button
+                      onClick={() => setTheme('dark')}
+                      className={`p-1.5 rounded-full transition-colors ${theme === 'dark' ? 'bg-[var(--color-accent)] text-white' : 'text-gray-500 hover:text-white'}`}
+                      aria-label="Mudar para tema escuro"
+                  >
+                      <MoonIcon className="w-5 h-5" />
+                  </button>
+              </div>
+          </div>
+           <div className="flex items-center justify-between mt-4">
+              <label htmlFor="auto-connect-toggle" className="font-medium text-sm text-[var(--color-text-primary)] cursor-pointer">
                   Conexão Automática
-                  <p className="text-xs text-gray-400 font-normal mt-1">Ajustar setas ao mover blocos</p>
+                  <p className="text-xs text-[var(--color-text-secondary)] font-normal mt-1">Ajustar setas ao mover blocos</p>
               </label>
               <button
                   role="switch"
                   aria-checked={autoConnect}
                   id="auto-connect-toggle"
                   onClick={() => setAutoConnect(prev => !prev)}
-                  className={`${autoConnect ? 'bg-cyan-500' : 'bg-gray-600'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 focus:ring-offset-[#1F2937]`}
+                  className={`${autoConnect ? 'bg-[var(--color-accent)]' : 'bg-gray-400 dark:bg-gray-600'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2 focus:ring-offset-[var(--color-bg-secondary)]`}
               >
                   <span
                       aria-hidden="true"
@@ -145,16 +180,16 @@ const Sidebar: React.FC<SidebarProps> = ({ addNode, autoConnect, setAutoConnect,
               </button>
           </div>
            <div className="flex items-center justify-between mt-4">
-              <label htmlFor="snap-to-grid-toggle" className="font-medium text-sm text-gray-200 cursor-pointer">
+              <label htmlFor="snap-to-grid-toggle" className="font-medium text-sm text-[var(--color-text-primary)] cursor-pointer">
                   Alinhar à Grade
-                  <p className="text-xs text-gray-400 font-normal mt-1">Ajustar posição ao criar/mover</p>
+                  <p className="text-xs text-[var(--color-text-secondary)] font-normal mt-1">Ajustar posição ao criar/mover</p>
               </label>
               <button
                   role="switch"
                   aria-checked={snapToGrid}
                   id="snap-to-grid-toggle"
                   onClick={() => setSnapToGrid(prev => !prev)}
-                  className={`${snapToGrid ? 'bg-cyan-500' : 'bg-gray-600'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 focus:ring-offset-[#1F2937]`}
+                  className={`${snapToGrid ? 'bg-[var(--color-accent)]' : 'bg-gray-400 dark:bg-gray-600'} relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)] focus:ring-offset-2 focus:ring-offset-[var(--color-bg-secondary)]`}
               >
                   <span
                       aria-hidden="true"
