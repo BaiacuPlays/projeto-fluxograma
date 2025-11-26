@@ -51,8 +51,7 @@ const getShape = (type: NodeType, width: number, height: number): React.ReactEle
         case 'process':
             return <rect x="0" y="0" width={width} height={height} rx="8" ry="8"/>;
         case 'decision':
-            const hexOffset = 20;
-            return <path d={`M ${hexOffset} 0 L ${width - hexOffset} 0 L ${width} ${height / 2} L ${width - hexOffset} ${height} L ${hexOffset} ${height} L 0 ${height / 2} Z`} />;
+            return <path d={`M ${width / 2} 0 L ${width} ${height / 2} L ${width / 2} ${height} L 0 ${height / 2} Z`} />;
         default:
             return <rect x="0" y="0" width={width} height={height} />;
     }
