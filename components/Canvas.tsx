@@ -16,7 +16,14 @@ type DisplacedNodeInfo = {
     originalPosition: Position;
 }
 
+type SnapHandle = {
+    nodeId: string;
+    handleIndex: number;
+    position: Position;
+};
+
 const CROWDED_THRESHOLD = 250; 
+const SNAP_DISTANCE = 30; // Distância em pixels para ativar o "ímã" da conexão
 
 const defaultDimensions = {
     start: { width: 150, height: 60 },
@@ -66,9 +73,10 @@ const Canvas: React.FC<CanvasProps> = ({
     const [isPanning, setIsPanning] = useState(false);
     const [lastMousePosition, setLastMousePosition] = useState<Position | null>(null);
 
-    const [connecting, setConnecting] = useState<{ sourceId: string; sourcePos: Position; label?: string; } | null>(null);
+    const [connecting, setConnecting] = useState<{ sourceId: string; sourcePos: Position; label?: string; sourceHandle?: number } | null>(null);
     const [reconnecting, setReconnecting] = useState<{ edgeId: string; handle: 'source' | 'target' } | null>(null);
-    const [previewLine, setPreviewLine] = useState<{ start: Position; end: Position } | null>(null);
+    const [previewLine, setPreviewLine] = useState<{ start: Position; end: Position; startHandle?: number; endHandle?: number } | null>(null);
+    const [snapHandle, setSnapHandle] = useState<SnapHandle | null>(null);
     
     const [selectionBox, setSelectionBox] = useState<{ start: Position; end: Position } | null>(null);
     const [dragInfo, setDragInfo] = useState<{
@@ -100,7 +108,6 @@ const Canvas: React.FC<CanvasProps> = ({
     const handleItemMouseDown = (e: React.MouseEvent, id: string, type: 'node' | 'annotation') => {
         e.preventDefault();
         
-        // Fix: Explicitly typed Set to resolve type inference issues.
         let newSelectedNodes: Set<string> = new Set(selectedNodeIds);
         let newSelectedAnnotations: Set<string> = new Set(selectedAnnotationIds);
 
@@ -181,21 +188,61 @@ const Canvas: React.FC<CanvasProps> = ({
 
         const currentMousePos = getSVGPoint(e);
 
-        if (connecting) {
-            setPreviewLine({ start: connecting.sourcePos, end: currentMousePos });
-        } else if (reconnecting) {
-            const edge = edges.find(ed => ed.id === reconnecting.edgeId);
-            if (edge) {
-                const isSourceHandle = reconnecting.handle === 'source';
-                const fixedNodeId = isSourceHandle ? edge.target : edge.source;
-                const fixedNode = nodes.find(n => n.id === fixedNodeId);
-                const draggedToNode = { id: 'mouse', type: 'process', position: currentMousePos, text: '' } as NodeData;
+        if (connecting || reconnecting) {
+            // Lógica de "ímã" (Snapping) para conexão
+            let closestHandle: SnapHandle | null = null;
+            let minDistance = SNAP_DISTANCE;
+
+            // Ignora o nó de origem para não conectar nele mesmo (no caso de novo nó)
+            const sourceId = connecting?.sourceId || 
+                           (reconnecting?.handle === 'source' ? edges.find(ed => ed.id === reconnecting.edgeId)?.target : edges.find(ed => ed.id === reconnecting.edgeId)?.source);
+
+            nodes.forEach(node => {
+                if (node.id === sourceId) return; // Não conectar no próprio nó
                 
-                if (fixedNode) {
-                    const { source: closestPointOnFixedNode } = getClosestConnection(fixedNode, draggedToNode);
-                    setPreviewLine({ start: closestPointOnFixedNode, end: currentMousePos });
+                const points = getConnectionPoints(node);
+                points.forEach((point, index) => {
+                    const dist = Math.sqrt(Math.pow(point.x - currentMousePos.x, 2) + Math.pow(point.y - currentMousePos.y, 2));
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        closestHandle = { nodeId: node.id, handleIndex: index, position: point };
+                    }
+                });
+            });
+
+            setSnapHandle(closestHandle);
+
+            const targetPos = closestHandle ? closestHandle.position : currentMousePos;
+
+            if (connecting) {
+                setPreviewLine({ 
+                    start: connecting.sourcePos, 
+                    end: targetPos,
+                    startHandle: connecting.sourceHandle,
+                    endHandle: closestHandle ? closestHandle.handleIndex : undefined
+                });
+            } else if (reconnecting) {
+                const edge = edges.find(ed => ed.id === reconnecting.edgeId);
+                if (edge) {
+                    const isSourceHandle = reconnecting.handle === 'source';
+                    const fixedNodeId = isSourceHandle ? edge.target : edge.source;
+                    const fixedNode = nodes.find(n => n.id === fixedNodeId);
+                    
+                    if (fixedNode) {
+                        const fixedPoints = getConnectionPoints(fixedNode);
+                        const fixedIndex = isSourceHandle ? (edge.targetHandle ?? 0) : (edge.sourceHandle ?? 0);
+                        const fixedPos = fixedPoints[fixedIndex] || fixedPoints[0];
+
+                        setPreviewLine({
+                            start: fixedPos,
+                            end: targetPos,
+                            startHandle: fixedIndex,
+                            endHandle: closestHandle ? closestHandle.handleIndex : undefined
+                        });
+                    }
                 }
             }
+
         } else if (dragInfo) {
             const dx = currentMousePos.x - dragInfo.startMousePos.x;
             const dy = currentMousePos.y - dragInfo.startMousePos.y;
@@ -290,13 +337,22 @@ const Canvas: React.FC<CanvasProps> = ({
         setDragInfo(null);
     }, [dragInfo, handleSingleNodeDragEnd, snapTarget]);
 
-    const finishConnecting = useCallback((targetId: string) => {
+    const finishConnecting = useCallback((targetId: string, targetHandleIndex?: number) => {
         if (connecting && connecting.sourceId !== targetId) {
             const sourceNode = nodes.find(n => n.id === connecting.sourceId);
             const targetNode = nodes.find(n => n.id === targetId);
             
             if (sourceNode && targetNode) {
-                const { sourceIndex, targetIndex } = getClosestConnection(sourceNode, targetNode);
+                let sourceIndex = connecting.sourceHandle ?? 0;
+                let targetIndex = targetHandleIndex ?? 0;
+
+                // Se não houver handles definidos explicitamente (não snapou), calcula o mais próximo
+                if (targetHandleIndex === undefined) {
+                    const closest = getClosestConnection(sourceNode, targetNode);
+                    if (connecting.sourceHandle === undefined) sourceIndex = closest.sourceIndex;
+                    targetIndex = closest.targetIndex;
+                }
+
                 const newEdge: EdgeData = {
                     id: `e-${connecting.sourceId}-${targetId}-${Date.now()}`,
                     source: connecting.sourceId,
@@ -310,9 +366,10 @@ const Canvas: React.FC<CanvasProps> = ({
         }
         setConnecting(null);
         setPreviewLine(null);
+        setSnapHandle(null);
     }, [connecting, setEdges, nodes]);
 
-    const finishReconnecting = useCallback((targetNodeId: string) => {
+    const finishReconnecting = useCallback((targetNodeId: string, targetHandleIndex?: number) => {
         if (!reconnecting) return;
 
         setEdges(prevEdges => {
@@ -331,7 +388,17 @@ const Canvas: React.FC<CanvasProps> = ({
 
             if (!sourceNode || !targetNode) return prevEdges;
             
-            const { sourceIndex, targetIndex } = getClosestConnection(sourceNode, targetNode);
+            let sourceIndex: number;
+            let targetIndex: number;
+            
+            // Lógica para preservar o handle do lado fixo e atualizar o lado arrastado
+            if (isSourceHandle) {
+                targetIndex = edgeToUpdate.targetHandle ?? 0;
+                sourceIndex = targetHandleIndex ?? getClosestConnection(sourceNode, targetNode).sourceIndex;
+            } else {
+                sourceIndex = edgeToUpdate.sourceHandle ?? 0;
+                targetIndex = targetHandleIndex ?? getClosestConnection(sourceNode, targetNode).targetIndex;
+            }
 
             return prevEdges.map(e => {
                 if (e.id === reconnecting.edgeId) {
@@ -348,6 +415,7 @@ const Canvas: React.FC<CanvasProps> = ({
         });
         setReconnecting(null);
         setPreviewLine(null);
+        setSnapHandle(null);
     }, [reconnecting, setEdges, nodes]);
     
     const handleEndInteraction = useCallback((targetNodeId: string | null) => {
@@ -389,15 +457,20 @@ const Canvas: React.FC<CanvasProps> = ({
             setSelectionBox(null);
         }
         
-        if (targetNodeId) {
+        // Prioriza o snapHandle se ele existir, mesmo que o mouse não esteja exatamente sobre a caixa do nó
+        if (snapHandle) {
+             if (connecting) finishConnecting(snapHandle.nodeId, snapHandle.handleIndex);
+             else if (reconnecting) finishReconnecting(snapHandle.nodeId, snapHandle.handleIndex);
+        } else if (targetNodeId) {
             if (connecting) finishConnecting(targetNodeId);
             else if (reconnecting) finishReconnecting(targetNodeId);
         } else {
             setConnecting(null);
             setReconnecting(null);
             setPreviewLine(null);
+            setSnapHandle(null);
         }
-    }, [isPanning, endDrag, selectionBox, connecting, reconnecting, finishConnecting, finishReconnecting, nodes, annotations, selectedNodeIds, setSelectedNodeIds, selectedAnnotationIds, setSelectedAnnotationIds]);
+    }, [isPanning, endDrag, selectionBox, connecting, reconnecting, finishConnecting, finishReconnecting, nodes, annotations, selectedNodeIds, setSelectedNodeIds, selectedAnnotationIds, setSelectedAnnotationIds, snapHandle]);
 
 
     const getSVGPointFromEvent = useCallback((e: globalThis.MouseEvent): Position => {
@@ -461,8 +534,8 @@ const Canvas: React.FC<CanvasProps> = ({
         });
     };
 
-    const startConnecting = useCallback((sourceId: string, sourcePos: Position, label?: string) => {
-        setConnecting({ sourceId, sourcePos, label });
+    const startConnecting = useCallback((sourceId: string, sourcePos: Position, label?: string, sourceHandle?: number) => {
+        setConnecting({ sourceId, sourcePos, label, sourceHandle });
     }, []);
 
     const startReconnecting = useCallback((edgeId: string, handle: 'source' | 'target') => {
@@ -690,15 +763,31 @@ const Canvas: React.FC<CanvasProps> = ({
                 )}
                 
                 {renderSnapPreview()}
+                
+                {/* Visualização da linha de conexão sendo criada/arrastada */}
                 {previewLine && (
-                    <path
-                        d={getCurvePath(previewLine.start, -1, previewLine.end, -1).path}
-                        stroke="var(--color-accent)"
-                        strokeWidth="2"
-                        fill="none"
-                        strokeDasharray="6,6"
-                        className="pointer-events-none"
-                    />
+                    <>
+                         <path
+                            d={getCurvePath(previewLine.start, previewLine.startHandle ?? -1, previewLine.end, previewLine.endHandle ?? -1).path}
+                            stroke="var(--color-accent)"
+                            strokeWidth="2"
+                            fill="none"
+                            strokeDasharray="6,6"
+                            className="pointer-events-none"
+                        />
+                        {/* Indicador visual de onde vai conectar (Snapping) */}
+                        {snapHandle && (
+                             <circle 
+                                cx={snapHandle.position.x} 
+                                cy={snapHandle.position.y} 
+                                r={8} 
+                                fill="none" 
+                                stroke="var(--color-accent)" 
+                                strokeWidth="2"
+                                className="pointer-events-none animate-pulse"
+                            />
+                        )}
+                    </>
                 )}
                 
                 {selectionBox && (

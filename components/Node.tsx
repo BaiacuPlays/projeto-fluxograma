@@ -8,7 +8,7 @@ interface NodeProps {
   onPositionChange: (id: string, position: Position) => void;
   onTextChange: (id: string, text: string) => void;
   onDelete: (id: string) => void;
-  onStartConnecting: (id: string, sourcePos: Position, label?: string) => void;
+  onStartConnecting: (id: string, sourcePos: Position, label?: string, sourceHandle?: number) => void;
   onSizeChange: (id: string, dimensions: { width: number; height: number }) => void;
   onOpenContextMenu: (x: number, y: number, node: NodeData) => void;
   isConnecting: boolean;
@@ -32,6 +32,7 @@ interface ResizingState {
 interface ConnectionPoint {
   pos: Position;
   label?: string;
+  index: number;
 }
 
 const MIN_DIMENSIONS: Record<NodeType, { width: number, height: number }> = {
@@ -64,19 +65,21 @@ const nodeClasses: Record<NodeType, string> = {
     end: 'node-end',
 };
 
+// Índices: 0: Top, 1: Right, 2: Bottom, 3: Left
 const getConnectionPoints = (type: NodeType, width: number, height: number): ConnectionPoint[] => {
     if (type === 'decision') {
         return [
-            { pos: { x: width / 2, y: 0 } },                  // Top (Entrada)
-            { pos: { x: width, y: height / 2 }, label: 'Sim' }, // Right (Saída)
-            { pos: { x: width / 2, y: height }, label: 'Não' }, // Bottom (Saída)
+            { pos: { x: width / 2, y: 0 }, index: 0 },                  // Top (Entrada)
+            { pos: { x: width, y: height / 2 }, label: 'Sim', index: 1 }, // Right (Saída)
+            { pos: { x: width / 2, y: height }, label: 'Não', index: 2 }, // Bottom (Saída)
+            { pos: { x: 0, y: height / 2 }, index: 3 },                  // Left (Extra)
         ];
     }
     return [
-        { pos: { x: width / 2, y: 0 } },    // Top
-        { pos: { x: width, y: height / 2 } }, // Right
-        { pos: { x: width / 2, y: height } }, // Bottom
-        { pos: { x: 0, y: height / 2 } },     // Left
+        { pos: { x: width / 2, y: 0 }, index: 0 },    // Top
+        { pos: { x: width, y: height / 2 }, index: 1 }, // Right
+        { pos: { x: width / 2, y: height }, index: 2 }, // Bottom
+        { pos: { x: 0, y: height / 2 }, index: 3 },     // Left
     ];
 };
 
@@ -140,7 +143,9 @@ const Node: React.FC<NodeProps> = ({
 
     const connectionPoints = getConnectionPoints(data.type, width, height);
     
+    // Mostra apenas os pontos com labels (Sim/Não) permanentemente para decisão, mas permite interagir com todos
     const alwaysVisibleConnectors = data.type === 'decision' ? connectionPoints.filter(p => p.label) : [];
+    // No hover, mostra todos os pontos
     const hoverConnectors = data.type === 'decision' ? connectionPoints.filter(p => !p.label) : connectionPoints;
 
     const shapeComponent = getShape(data.type, width, height);
@@ -217,7 +222,8 @@ const Node: React.FC<NodeProps> = ({
             x: data.position.x + point.pos.x,
             y: data.position.y + point.pos.y,
         };
-        onStartConnecting(data.id, absolutePos, point.label);
+        // Passa o índice do handle explicitamente
+        onStartConnecting(data.id, absolutePos, point.label, point.index);
     };
     
     const handleContextMenu = (e: React.MouseEvent) => {
@@ -362,13 +368,14 @@ const Node: React.FC<NodeProps> = ({
 
             {!isEditing && (
                 <g>
-                    {alwaysVisibleConnectors.map((point, index) => (
+                    {alwaysVisibleConnectors.map((point) => (
                        <g
-                            key={`always-${index}`}
+                            key={`always-${point.index}`}
                             className="cursor-crosshair group/connector"
                             onMouseDown={(e) => handleConnectorMouseDown(e, point)}
                         >
-                            <circle cx={point.pos.x} cy={point.pos.y} r="12" fill="transparent"/>
+                            {/* Aumenta a área de clique invisível para facilitar a conexão */}
+                            <circle cx={point.pos.x} cy={point.pos.y} r="16" fill="transparent"/>
                              <circle
                                 cx={point.pos.x}
                                 cy={point.pos.y}
@@ -404,13 +411,14 @@ const Node: React.FC<NodeProps> = ({
 
             {!isEditing && (
                 <g className="opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                    {hoverConnectors.map((point, index) => (
+                    {hoverConnectors.map((point) => (
                        <g
-                            key={`hover-${index}`}
+                            key={`hover-${point.index}`}
                             className="cursor-crosshair group/connector"
                             onMouseDown={(e) => handleConnectorMouseDown(e, point)}
                         >
-                            <circle cx={point.pos.x} cy={point.pos.y} r="12" fill="transparent"/>
+                             {/* Aumenta a área de clique invisível para facilitar a conexão */}
+                            <circle cx={point.pos.x} cy={point.pos.y} r="16" fill="transparent"/>
                              <circle
                                 cx={point.pos.x}
                                 cy={point.pos.y}

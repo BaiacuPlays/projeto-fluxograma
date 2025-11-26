@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { EdgeData, NodeData, Position } from '../types';
 import { TrashIcon } from './Icons';
@@ -30,12 +31,23 @@ export const getConnectionPoints = (node: NodeData): Position[] => {
         ? { width: node.width, height: node.height } 
         : defaultDimensions[type];
 
-    const points: Position[] = [
-        { x: width / 2, y: 0 },    // Top
-        { x: width, y: height / 2 }, // Right
-        { x: width / 2, y: height }, // Bottom
-        { x: 0, y: height / 2 },     // Left
-    ];
+    let points: Position[];
+
+    if (type === 'decision') {
+        points = [
+            { x: width / 2, y: 0 },         // Top (0)
+            { x: width, y: height / 2 },    // Right (1)
+            { x: width / 2, y: height },    // Bottom (2)
+            { x: 0, y: height / 2 },        // Left (3) - Adicionado para permitir entrada pela esquerda se necessário
+        ];
+    } else {
+        points = [
+            { x: width / 2, y: 0 },         // Top (0)
+            { x: width, y: height / 2 },    // Right (1)
+            { x: width / 2, y: height },    // Bottom (2)
+            { x: 0, y: height / 2 },        // Left (3)
+        ];
+    }
 
     return points.map(p => ({ x: p.x + position.x, y: p.y + position.y }));
 };
@@ -76,39 +88,57 @@ export const getCurvePath = (sourcePos: Position, sourceIndex: number, targetPos
 
     const dx = tx - sx;
     const dy = ty - sy;
-    const offset = Math.min(100, Math.sqrt(dx*dx + dy*dy) * 0.5);
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    
+    // Aumenta a curvatura baseada na distância para evitar linhas muito retas e coladas
+    const offset = Math.min(150, Math.max(50, dist * 0.5));
 
     let c1x = sx, c1y = sy;
     let c2x = tx, c2y = ty;
     
-    const getControlPoint = (pos: Position, index: number, delta: {x: number, y: number}) => {
-        let {x, y} = pos;
-        if (index < 0 || index > 3) { // Preview line logic
-             if (Math.abs(delta.x) > Math.abs(delta.y)) {
-                if (delta.x > 0) x += offset; else x -= offset;
-            } else {
-                if (delta.y > 0) y += offset; else y -= offset;
-            }
-        } else { // Standard logic
-            if (index === 0) y -= offset; // Top
-            if (index === 1) x += offset; // Right
-            if (index === 2) y += offset; // Bottom
-            if (index === 3) x -= offset; // Left
+    // Helper para determinar a direção do vetor de controle baseado no índice do ponto
+    // Índices: 0: Top, 1: Right, 2: Bottom, 3: Left
+    const getControlDirection = (index: number) => {
+        if (index === 0) return { x: 0, y: -1 }; // Sai para cima
+        if (index === 1) return { x: 1, y: 0 };  // Sai para direita
+        if (index === 2) return { x: 0, y: 1 };  // Sai para baixo
+        if (index === 3) return { x: -1, y: 0 }; // Sai para esquerda
+        return { x: 0, y: 0 };
+    };
+
+    if (sourceIndex >= 0 && sourceIndex <= 3) {
+        const dir = getControlDirection(sourceIndex);
+        c1x = sx + dir.x * offset;
+        c1y = sy + dir.y * offset;
+    } else {
+        // Fallback dinâmico para preview line (arrastando mouse)
+        if (Math.abs(dx) > Math.abs(dy)) {
+             c1x = sx + (dx > 0 ? offset : -offset);
+        } else {
+             c1y = sy + (dy > 0 ? offset : -offset);
         }
-        return {x, y};
     }
 
-    const cp1 = getControlPoint({x: sx, y: sy}, sourceIndex, {x: dx, y: dy});
-    c1x = cp1.x; c1y = cp1.y;
-
-    const cp2 = getControlPoint({x: tx, y: ty}, targetIndex, {x: -dx, y: -dy});
-    c2x = cp2.x; c2y = cp2.y;
-
+    if (targetIndex >= 0 && targetIndex <= 3) {
+        const dir = getControlDirection(targetIndex);
+        c2x = tx + dir.x * offset;
+        c2y = ty + dir.y * offset;
+    } else {
+        // Fallback dinâmico para preview line
+        if (Math.abs(dx) > Math.abs(dy)) {
+            c2x = tx + (dx > 0 ? -offset : offset);
+        } else {
+            c2y = ty + (dy > 0 ? -offset : offset);
+        }
+    }
 
     const path = `M ${sx} ${sy} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${tx} ${ty}`;
     
-    const midX = (0.125 * sx) + (0.375 * c1x) + (0.375 * c2x) + (0.125 * tx);
-    const midY = (0.125 * sy) + (0.375 * c1y) + (0.375 * c2y) + (0.125 * ty);
+    // Ponto médio da curva de Bezier Cúbica para o rótulo
+    const t = 0.5;
+    const mt = 1 - t;
+    const midX = mt*mt*mt*sx + 3*mt*mt*t*c1x + 3*mt*t*t*c2x + t*t*t*tx;
+    const midY = mt*mt*mt*sy + 3*mt*mt*t*c1y + 3*mt*t*t*c2y + t*t*t*ty;
 
     return { path, labelPos: { x: midX, y: midY } };
 };
@@ -137,7 +167,10 @@ const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSel
   
   let finalSourcePos: Position, finalTargetPos: Position, finalSourceIndex: number, finalTargetIndex: number;
 
-  if (autoConnect || edge.sourceHandle === undefined || edge.targetHandle === undefined) {
+  // Se autoConnect for true E não houver handles definidos explicitamente (legado ou reset)
+  const useAutoConnect = autoConnect && (edge.sourceHandle === undefined || edge.targetHandle === undefined);
+
+  if (useAutoConnect) {
       const closest = getClosestConnection(sourceNode, targetNode);
       finalSourcePos = closest.source;
       finalTargetPos = closest.target;
@@ -147,9 +180,10 @@ const Edge: React.FC<EdgeProps> = ({ edge, nodes, autoConnect, isSelected, onSel
       const sourcePoints = getConnectionPoints(sourceNode);
       const targetPoints = getConnectionPoints(targetNode);
       
-      finalSourceIndex = edge.sourceHandle;
-      finalTargetIndex = edge.targetHandle;
+      finalSourceIndex = edge.sourceHandle ?? 0; // Default to Top if undefined but autoconnect is off
+      finalTargetIndex = edge.targetHandle ?? 0;
       
+      // Fallback de segurança se o índice salvo for inválido para o tipo atual
       if (finalSourceIndex >= sourcePoints.length) finalSourceIndex = 0;
       if (finalTargetIndex >= targetPoints.length) finalTargetIndex = 0;
 
